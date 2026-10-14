@@ -833,10 +833,10 @@
 | Язык | Python 3.13 |
 | Фреймворк | Django 5.2 LTS |
 | БД | PostgreSQL 16 (в Docker) |
-| Интерфейс | django-unfold + HTMX для интерактивных страниц |
+| Интерфейс | django-unfold; генераторы — диалоги unfold на HTMX |
 | Импорт/экспорт | django-import-export |
 | История изменений | django-simple-history |
-| Дерево категорий | django-treebeard |
+| Дерево категорий | своё: ссылка на родителя + путь «Родитель → Ребёнок» |
 | Миниатюры фото | Pillow (+ pillow-heif для фото с iPhone) |
 | Конфигурация | `.env` через django-environ |
 | Качество кода | ruff (линтер и форматтер), pytest |

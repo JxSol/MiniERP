@@ -1,0 +1,194 @@
+# Перевод подписей django-unfold, которых нет в его пакете.
+# После правок: python scripts/compile_locale.py
+
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8\nLanguage: ru\n"
+
+msgid "General"
+msgstr "Карточка"
+
+msgid "Filters"
+msgstr "Фильтры"
+
+msgid "Apply Filters"
+msgstr "Применить"
+
+msgid "Reset filters"
+msgstr "Сбросить фильтры"
+
+msgid "Clear all filters"
+msgstr "Сбросить все фильтры"
+
+msgid "Search apps and models..."
+msgstr "Поиск по разделам…"
+
+msgid "Return to site"
+msgstr "На сайт"
+
+msgid "Welcome back to"
+msgstr "Добро пожаловать в"
+
+msgid "Type to search"
+msgstr "Начните вводить для поиска"
+
+msgid "No results found"
+msgstr "Ничего не найдено"
+
+msgid "Nothing matched your search"
+msgstr "Ничего не найдено"
+
+msgid "Recent searches"
+msgstr "Недавние поиски"
+
+msgid "Hide counts"
+msgstr "Скрыть количество"
+
+msgid "Show counts"
+msgstr "Показать количество"
+
+msgid "Toggle sidebar"
+msgstr "Свернуть меню"
+
+msgid "Toggle dark/light mode"
+msgstr "Тёмная/светлая тема"
+
+msgid "Dark"
+msgstr "Тёмная"
+
+msgid "Light"
+msgstr "Светлая"
+
+msgid "System"
+msgstr "Как в системе"
+
+msgid "Navigate"
+msgstr "Перейти"
+
+msgid "Open command tool"
+msgstr "Открыть поиск"
+
+msgid "Available shortcuts"
+msgstr "Горячие клавиши"
+
+msgid "Global shortcuts"
+msgstr "Общие сочетания клавиш"
+
+msgid "Changelist shortcuts"
+msgstr "Сочетания в списках"
+
+msgid "Command tool shortcuts"
+msgstr "Сочетания в поиске"
+
+msgid "Open shortcuts list"
+msgstr "Список горячих клавиш"
+
+msgid "Create new record"
+msgstr "Создать запись"
+
+msgid "Go back"
+msgstr "Назад"
+
+msgid "No data"
+msgstr "Нет данных"
+
+msgid "This page yielded into no results."
+msgstr "Здесь пока ничего нет."
+
+msgid "Clear selection"
+msgstr "Снять выделение"
+
+msgid "Open selection"
+msgstr "Открыть выбранное"
+
+msgid "Open selection in new tab"
+msgstr "Открыть в новой вкладке"
+
+msgid "Toggle filter"
+msgstr "Фильтр"
+
+msgid "Toggle sorting"
+msgstr "Сортировка"
+
+msgid "Remove from sorting"
+msgstr "Убрать из сортировки"
+
+msgid "Add row"
+msgstr "Добавить строку"
+
+msgid "Record picture"
+msgstr "Фото"
+
+msgid "Click to download"
+msgstr "Скачать"
+
+msgid "Click to cancel"
+msgstr "Отменить"
+
+msgid "Run"
+msgstr "Выполнить"
+
+msgid "Run the selected action"
+msgstr "Выполнить выбранное действие"
+
+msgid "Save and view"
+msgstr "Сохранить и посмотреть"
+
+msgid "Summary"
+msgstr "Итого"
+
+msgid "Objects"
+msgstr "Записи"
+
+msgid "Select"
+msgstr "Выбрать"
+
+msgid "Unknown"
+msgstr "Неизвестно"
+
+msgid "True"
+msgstr "Да"
+
+msgid "False"
+msgstr "Нет"
+
+msgid "Toggle password visibility"
+msgstr "Показать пароль"
+
+msgid "Submit"
+msgstr "Отправить"
+
+msgid "Cancel"
+msgstr "Отмена"
+
+msgid "Close"
+msgstr "Закрыть"
+
+msgid "Next"
+msgstr "Далее"
+
+msgid "Previous"
+msgstr "Назад"
+
+msgid "Clear"
+msgstr "Очистить"
+
+msgid "Show all"
+msgstr "Показать все"
+
+msgid "All applications"
+msgstr "Все разделы"
+
+msgid "Save and add another"
+msgstr "Сохранить и добавить ещё"
+
+msgid "Save and continue editing"
+msgstr "Сохранить и продолжить"
+
+msgid "Yes, I’m sure"
+msgstr "Да, удалить"
+
+msgid "No, take me back"
+msgstr "Нет, вернуться"
+
+msgid "This item will be deleted."
+msgstr "Запись будет удалена."

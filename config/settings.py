@@ -40,6 +40,13 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "import_export",
     "simple_history",
+    # Приложения проекта
+    "core",
+    "catalog",
+    "production",
+    "sales",
+    "gallery",
+    "costing",
 ]
 
 MIDDLEWARE = [
@@ -95,6 +102,8 @@ LANGUAGE_CODE = "ru"
 TIME_ZONE = "Asia/Almaty"
 USE_I18N = True
 USE_TZ = True
+LOCALE_PATHS = [BASE_DIR / "locale"]
+FORMS_URLFIELD_ASSUME_HTTPS = True
 
 
 # Статика и загруженные файлы (фото изделий)
@@ -110,8 +119,106 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Оформление админки
 
+from django.urls import reverse_lazy  # noqa: E402
+
+
+def _item(title, icon, url_name, perm):
+    return {
+        "title": title,
+        "icon": icon,
+        "link": reverse_lazy(url_name),
+        "permission": f"core.navigation.{perm}",
+    }
+
+
 UNFOLD = {
     "SITE_TITLE": "Мини-ERP",
     "SITE_HEADER": "Мини-ERP",
     "SITE_SYMBOL": "precision_manufacturing",
+    "SHOW_HISTORY": True,
+    "SIDEBAR": {
+        "show_search": True,
+        "show_all_applications": False,
+        "navigation": [
+            {
+                "title": "Товары",
+                "items": [
+                    _item("Товары", "sell", "admin:sales_product_changelist", "view_product"),
+                ],
+            },
+            {
+                "title": "Производство",
+                "items": [
+                    _item(
+                        "Модели",
+                        "deployed_code",
+                        "admin:production_productmodel_changelist",
+                        "view_model",
+                    ),
+                    _item(
+                        "Варианты", "palette", "admin:production_variant_changelist", "view_variant"
+                    ),
+                    _item("Детали", "extension", "admin:production_part_changelist", "view_part"),
+                ],
+            },
+            {
+                "title": "Справочники",
+                "collapsible": True,
+                "items": [
+                    _item(
+                        "Материалы",
+                        "inventory",
+                        "admin:catalog_material_changelist",
+                        "view_material",
+                    ),
+                    _item(
+                        "Палитра цветов",
+                        "format_paint",
+                        "admin:catalog_color_changelist",
+                        "view_color",
+                    ),
+                    _item(
+                        "Оборудование",
+                        "print",
+                        "admin:catalog_equipment_changelist",
+                        "view_equipment",
+                    ),
+                    _item(
+                        "Типы операций",
+                        "handyman",
+                        "admin:catalog_operationtype_changelist",
+                        "view_operationtype",
+                    ),
+                    _item(
+                        "Категории материалов",
+                        "category",
+                        "admin:catalog_materialcategory_changelist",
+                        "view_materialcategory",
+                    ),
+                    _item(
+                        "Категории изделий",
+                        "account_tree",
+                        "admin:production_productcategory_changelist",
+                        "view_productcategory",
+                    ),
+                    _item("Метки", "label", "admin:core_tag_changelist", "view_tag"),
+                    _item("Размеры", "straighten", "admin:core_size_changelist", "view_size"),
+                ],
+            },
+            {
+                "title": "Система",
+                "collapsible": True,
+                "items": [
+                    _item(
+                        "Общие настройки",
+                        "settings",
+                        "admin:core_sitesettings_changelist",
+                        "view_settings",
+                    ),
+                    _item("Пользователи", "person", "admin:auth_user_changelist", "view_user"),
+                    _item("Роли", "group", "admin:auth_group_changelist", "view_group"),
+                ],
+            },
+        ],
+    },
 }

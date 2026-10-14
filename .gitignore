@@ -17,3 +17,6 @@ venv/
 .vscode/
 Thumbs.db
 .DS_Store
+
+# Локальные настройки Claude Code
+.claude/launch.json

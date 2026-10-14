@@ -5,6 +5,8 @@ django-environ==0.14.0
 django-import-export==4.4.1
 django-simple-history==3.13.0
 django-unfold==0.110.0
+pillow==12.3.0
+pillow_heif==1.8.1
 psycopg==3.3.6
 psycopg-binary==3.3.6
 sqlparse==0.6.0
