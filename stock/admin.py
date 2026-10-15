@@ -16,7 +16,7 @@ from unfold.decorators import action, display
 from unfold.widgets import UnfoldAdminSelectWidget
 
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
-from core.admin_utils import fmt_number, hx_redirect
+from core.admin_utils import PageHelpMixin, fmt_number, hx_redirect
 from core.forms import ActiveChoicesForm
 
 from . import reports
@@ -80,7 +80,7 @@ class DocumentForm(ActiveChoicesForm):
                 self.fields["warehouse"].initial = default.pk
 
 
-class DocumentAdmin(HistoryAdmin, ModelAdmin):
+class DocumentAdmin(PageHelpMixin, HistoryAdmin, ModelAdmin):
     """Запись проводится при сохранении; отменить можно кнопкой вверху."""
 
     form = DocumentForm
@@ -440,7 +440,7 @@ class LowStockFilter(SimpleListFilter):
         return queryset.filter(material_id__in=low_ids)
 
 
-class ReadOnlyAdmin(ModelAdmin):
+class ReadOnlyAdmin(PageHelpMixin, ModelAdmin):
     def has_add_permission(self, request):
         return False
 

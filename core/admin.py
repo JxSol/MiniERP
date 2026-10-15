@@ -9,6 +9,7 @@ from simple_history.admin import SimpleHistoryAdmin
 from unfold.admin import ModelAdmin, TabularInline
 from unfold.forms import AdminPasswordChangeForm, UserChangeForm, UserCreationForm
 
+from .admin_utils import PageHelpMixin
 from .forms import ActiveChoicesForm
 from .models import SiteSettings, Size, Tag
 
@@ -26,7 +27,7 @@ class HistoryAdmin(SimpleHistoryAdmin):
         return super().history_form_view(request, object_id, version_id, extra_context)
 
 
-class ArchiveAdmin(ModelAdmin):
+class ArchiveAdmin(PageHelpMixin, ModelAdmin):
     """
     Общие настройки: архивные записи видны через фильтр «Активно», не предлагаются
     в выпадающих списках и автокомплите, но у существующих записей остаются допустимыми.
@@ -53,7 +54,7 @@ class ArchiveAdmin(ModelAdmin):
 
 
 @admin.register(SiteSettings)
-class SiteSettingsAdmin(HistoryAdmin, ModelAdmin):
+class SiteSettingsAdmin(PageHelpMixin, HistoryAdmin, ModelAdmin):
     """Одна запись: список сразу открывает форму, добавлять и удалять нельзя."""
 
     fieldsets = (
@@ -123,12 +124,12 @@ admin.site.unregister(Group)
 
 
 @admin.register(User)
-class UserAdmin(BaseUserAdmin, ModelAdmin):
+class UserAdmin(PageHelpMixin, BaseUserAdmin, ModelAdmin):
     form = UserChangeForm
     add_form = UserCreationForm
     change_password_form = AdminPasswordChangeForm
 
 
 @admin.register(Group)
-class GroupAdmin(BaseGroupAdmin, ModelAdmin):
+class GroupAdmin(PageHelpMixin, BaseGroupAdmin, ModelAdmin):
     pass

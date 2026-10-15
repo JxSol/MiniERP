@@ -202,6 +202,37 @@ def safe_tree(build, obj):
         return error
 
 
+class PageHelpMixin:
+    """Кнопка «О разделе» (i) над списком и над карточкой: окно с описанием раздела."""
+
+    list_before_template = "admin/page_help.html"
+    change_form_outer_before_template = "admin/page_help.html"
+
+    def _help_context(self, request, extra_context):
+        from core.help import help_for
+
+        page_help = help_for(self.model)
+        if page_help and not can_view_cost(request):
+            # Продавцу не показываем пункты про себестоимость — он её не видит
+            hidden = "себестоимост"
+            page_help = {
+                key: [i for i in value if hidden not in i.lower()]
+                if isinstance(value, list)
+                else value
+                for key, value in page_help.items()
+                if not (isinstance(value, str) and key != "title" and hidden in value.lower())
+            }
+        return {**(extra_context or {}), "page_help": page_help}
+
+    def changelist_view(self, request, extra_context=None):
+        return super().changelist_view(request, self._help_context(request, extra_context))
+
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        return super().changeform_view(
+            request, object_id, form_url, self._help_context(request, extra_context)
+        )
+
+
 class CostVisibilityMixin:
     """
     Убирает поля и колонки себестоимости для ролей без права sales.view_cost.
