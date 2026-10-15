@@ -189,4 +189,83 @@ def load_demo() -> dict:
     generators.create_set(
         ball, [red, green, violet, gold], 100, packaging=big_box, packing_minutes=D(20)
     )
+    load_demo_stock()
     return {"luna": luna, "ball": ball}
+
+
+@transaction.atomic
+def load_demo_stock() -> None:
+    """Склад: закупка, печать с браком, сборка и упаковка одной «Луны»."""
+    from stock.models import (
+        Assembly,
+        Inventory,
+        InventoryLine,
+        Packing,
+        ProductionRun,
+        Receipt,
+        ReceiptLine,
+        Warehouse,
+    )
+
+    luna = ProductModel.objects.get(name="Светильник Луна")
+    workshop = Warehouse.objects.create(name="Цех", is_default=True)
+    Warehouse.objects.create(name="Магазин", order=1)
+
+    receipt = Receipt.objects.create(warehouse=workshop, notes="первая закупка")
+    for name, color, packs in (
+        ("PLA Basic", "Белый", 3),
+        ("PLA Basic", "Чёрный", 1),
+        ("PLA Silk", "Золотой", 1),
+    ):
+        material = Material.objects.get(name=name, color__name=color)
+        offer = material.offers.get()
+        ReceiptLine.objects.create(
+            receipt=receipt,
+            material=material,
+            offer=offer,
+            packs=D(packs),
+            pack_size=offer.pack_size,
+            pack_price=offer.pack_price,
+        )
+    receipt.post()
+
+    inventory = Inventory.objects.create(
+        warehouse=workshop, notes="начальные остатки комплектующих"
+    )
+    for name, qty in (
+        ("Фанера 4 мм", 5),
+        ("Шнур с выключателем", 10),
+        ("Патрон E27", 10),
+        ("Винт M3", 100),
+        ("Коробка 20×20×25", 10),
+        ("Коробочка 8×8×8", 50),
+        ("Коробка 40×30×30", 5),
+    ):
+        InventoryLine.objects.create(
+            inventory=inventory,
+            material=Material.objects.get(name=name),
+            counted_qty=D(qty),
+            reason="начальный остаток",
+        )
+    inventory.post()
+
+    white = Material.objects.get(name="PLA Basic", color__name="Белый")
+    for part_name, good, scrap in (
+        ("Плафон Луна", 2, 1),
+        ("Фиксатор плафона", 10, 0),
+        ("Подставка Луна", 4, 0),
+    ):
+        part = Part.objects.get(name=part_name)
+        ProductionRun.objects.create(
+            warehouse=workshop,
+            part=part,
+            equipment=part.equipment,
+            material=white if part.material.name == "PLA Basic" else part.material,
+            good_qty=good,
+            scrap_qty=scrap,
+        ).post()
+
+    Assembly.objects.create(
+        warehouse=workshop, variant=variant_of(luna, "Белый"), quantity=2
+    ).post()
+    Packing.objects.create(warehouse=workshop, product=product_of(luna, "Белый"), quantity=1).post()

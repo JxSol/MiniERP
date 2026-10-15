@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django import forms
 from django.contrib import admin
 from django.db.models import Avg, DecimalField, ExpressionWrapper, F, Q
@@ -320,8 +322,14 @@ class EquipmentAdmin(HistoryAdmin, ArchiveAdmin):
 
     @display(description="% брака (итоговый)")
     def scrap_display(self, obj):
+        from stock.reports import fact_scrap_percent
+
         source = "свой" if obj.scrap_percent is not None else "из общих настроек"
-        return f"{fmt_number(obj.effective_scrap_percent)} % ({source})"
+        planned = f"{fmt_number(obj.effective_scrap_percent)} % ({source})"
+        fact = fact_scrap_percent(equipment=obj) if obj.pk else None
+        if fact is None:
+            return planned
+        return f"{planned}; факт по выпускам: {fmt_number(fact.quantize(Decimal('0.1')))} %"
 
 
 # --- Типы операций -----------------------------------------------------------------

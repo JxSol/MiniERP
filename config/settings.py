@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     "sales",
     "gallery",
     "costing",
+    "stock",
 ]
 
 MIDDLEWARE = [
@@ -160,6 +161,48 @@ UNFOLD = {
                 ],
             },
             {
+                "title": "Склад",
+                "items": [
+                    _item(
+                        "Остатки",
+                        "inventory_2",
+                        "admin:stock_stockbalance_changelist",
+                        "view_stock",
+                    ),
+                    _item(
+                        "Купили", "shopping_cart", "admin:stock_receipt_changelist", "view_receipt"
+                    ),
+                    _item(
+                        "Напечатали / вырезали",
+                        "print",
+                        "admin:stock_productionrun_changelist",
+                        "view_run",
+                    ),
+                    _item(
+                        "Собрали",
+                        "construction",
+                        "admin:stock_assembly_changelist",
+                        "view_assembly",
+                    ),
+                    _item(
+                        "Упаковали", "package_2", "admin:stock_packing_changelist", "view_packing"
+                    ),
+                    _item(
+                        "Переместили",
+                        "local_shipping",
+                        "admin:stock_transfer_changelist",
+                        "view_transfer",
+                    ),
+                    _item(
+                        "Пересчитали",
+                        "fact_check",
+                        "admin:stock_inventory_changelist",
+                        "view_inventory",
+                    ),
+                    _item("Движения", "list_alt", "admin:stock_stockmove_changelist", "view_moves"),
+                ],
+            },
+            {
                 "title": "Производство",
                 "items": [
                     _item(
@@ -225,6 +268,9 @@ UNFOLD = {
                         "account_tree",
                         "admin:production_productcategory_changelist",
                         "view_productcategory",
+                    ),
+                    _item(
+                        "Склады", "warehouse", "admin:stock_warehouse_changelist", "view_warehouse"
                     ),
                     _item("Метки", "label", "admin:core_tag_changelist", "view_tag"),
                     _item("Размеры", "straighten", "admin:core_size_changelist", "view_size"),

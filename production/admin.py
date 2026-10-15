@@ -150,10 +150,17 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
     def scrap_display(self, obj):
         if not obj.pk:
             return "—"
+        from stock.reports import fact_scrap_percent
+
         if obj.scrap_percent is not None:
-            return f"{fmt_number(obj.scrap_percent)} % (свой)"
-        source = "из станка" if obj.equipment.scrap_percent is not None else "из общих настроек"
-        return f"{fmt_number(obj.equipment.effective_scrap_percent)} % ({source})"
+            planned = f"{fmt_number(obj.scrap_percent)} % (свой)"
+        else:
+            source = "из станка" if obj.equipment.scrap_percent is not None else "из общих настроек"
+            planned = f"{fmt_number(obj.equipment.effective_scrap_percent)} % ({source})"
+        fact = fact_scrap_percent(part=obj)
+        if fact is None:
+            return f"{planned}; факт: выпусков ещё не было"
+        return f"{planned}; факт по выпускам: {fmt_number(fact.quantize(Decimal('0.1')))} %"
 
     @display(description="Себестоимость 1 шт", ordering="cost_cached")
     def cost_display(self, obj):

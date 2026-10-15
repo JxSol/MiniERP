@@ -202,6 +202,14 @@ class Material(UniqueNameModel):
         choices=Unit.choices,
         help_text="В чём считается расход в деталях: граммы для пластика, листы для фанеры, штуки.",
     )
+    min_stock = models.DecimalField(
+        "Минимальный остаток",
+        max_digits=14,
+        decimal_places=4,
+        default=Decimal(0),
+        validators=[MinValueValidator(Decimal(0))],
+        help_text="Когда остаток по всем складам опускается ниже, материал попадает в «Требует внимания». 0 — не следить.",
+    )
 
     history = HistoricalRecords()
 

@@ -8,7 +8,7 @@
 from django.db import transaction
 from django.db.models.signals import post_delete, post_save
 
-from catalog.models import Equipment, Material, OperationType
+from catalog.models import Equipment, Material, MaterialOffer, OperationType
 from core.models import SiteSettings
 from production.models import (
     ModelComponent,
@@ -27,6 +27,7 @@ from .services import recalculate_all
 TRIGGERS = (
     SiteSettings,
     Material,
+    MaterialOffer,
     Equipment,
     OperationType,
     Part,

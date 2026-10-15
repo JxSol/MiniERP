@@ -16,7 +16,7 @@ TECHNOLOGIST = "Технолог"
 SELLER = "Продавец"
 OBSERVER = "Наблюдатель"
 
-PROJECT_APPS = ("core", "catalog", "production", "sales", "gallery")
+PROJECT_APPS = ("core", "catalog", "production", "sales", "gallery", "stock")
 
 # Справочники, которые технолог только просматривает
 REFERENCE_MODELS = [
@@ -31,6 +31,9 @@ REFERENCE_MODELS = [
     "catalog.operationtype",
     "catalog.materialpricehistory",
     "production.productcategory",
+    "stock.warehouse",
+    "stock.stockbalance",
+    "stock.stockmove",
 ]
 
 # Основные записи: технолог создаёт и меняет, но не удаляет
@@ -40,6 +43,12 @@ WORK_MODELS = [
     "production.productmodel",
     "production.variant",
     "sales.product",
+    "stock.receipt",
+    "stock.productionrun",
+    "stock.assembly",
+    "stock.packing",
+    "stock.transfer",
+    "stock.inventory",
 ]
 
 # Строки внутри основных записей: можно и удалять (убрать деталь из модели и т. п.)
@@ -54,6 +63,9 @@ LINE_MODELS = [
     "sales.productpackaging",
     "sales.productoperation",
     "gallery.photo",
+    "stock.receiptline",
+    "stock.transferline",
+    "stock.inventoryline",
 ]
 
 
