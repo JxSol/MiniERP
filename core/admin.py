@@ -2,20 +2,48 @@ from django.contrib import admin
 from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import Group, User
+from django.core.exceptions import PermissionDenied
 from django.shortcuts import redirect
 from django.urls import reverse
 from simple_history.admin import SimpleHistoryAdmin
-from unfold.admin import ModelAdmin
+from unfold.admin import ModelAdmin, TabularInline
 from unfold.forms import AdminPasswordChangeForm, UserChangeForm, UserCreationForm
 
+from .forms import ActiveChoicesForm
 from .models import SiteSettings, Size, Tag
 
 
-class ArchiveAdmin(ModelAdmin):
-    """Общие настройки списков: архивные записи видны через фильтр «Активно»."""
+class HistoryAdmin(SimpleHistoryAdmin):
+    """
+    История изменений. simple_history разрешает POST на странице версии любому,
+    у кого есть право просмотра, — закрываем это: менять запись может только тот,
+    у кого есть право на изменение.
+    """
 
+    def history_form_view(self, request, object_id, version_id, extra_context=None):
+        if request.method == "POST" and not self.has_change_permission(request):
+            raise PermissionDenied
+        return super().history_form_view(request, object_id, version_id, extra_context)
+
+
+class ArchiveAdmin(ModelAdmin):
+    """
+    Общие настройки: архивные записи видны через фильтр «Активно», не предлагаются
+    в выпадающих списках и автокомплите, но у существующих записей остаются допустимыми.
+    """
+
+    form = ActiveChoicesForm
     list_filter_submit = False
     warn_unsaved_form = True
+
+    def get_search_results(self, request, queryset, search_term):
+        queryset, distinct = super().get_search_results(request, queryset, search_term)
+        is_autocomplete = (
+            request.resolver_match and request.resolver_match.url_name == "autocomplete"
+        )
+        if is_autocomplete and hasattr(self.model, "is_active"):
+            queryset = queryset.filter(is_active=True)
+        return queryset, distinct
 
     def get_list_filter(self, request):
         filters = list(super().get_list_filter(request))
@@ -25,7 +53,7 @@ class ArchiveAdmin(ModelAdmin):
 
 
 @admin.register(SiteSettings)
-class SiteSettingsAdmin(SimpleHistoryAdmin, ModelAdmin):
+class SiteSettingsAdmin(HistoryAdmin, ModelAdmin):
     """Одна запись: список сразу открывает форму, добавлять и удалять нельзя."""
 
     fieldsets = (
@@ -79,6 +107,14 @@ class SizeAdmin(ArchiveAdmin):
     list_editable = ("order",)
     search_fields = ("name", "code")
     fields = ("name", "code", "order", "is_active", "notes")
+
+
+class LineInline(TabularInline):
+    """Табличная строка внутри карточки: архивные справочные записи не предлагаются."""
+
+    form = ActiveChoicesForm
+    extra = 0
+    tab = True
 
 
 # Пользователи и группы в оформлении unfold

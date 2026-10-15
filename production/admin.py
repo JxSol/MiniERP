@@ -8,8 +8,6 @@ from django.forms.models import BaseInlineFormSet
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
-from simple_history.admin import SimpleHistoryAdmin
-from unfold.admin import TabularInline
 from unfold.decorators import action, display
 from unfold.forms import BaseDialogForm
 from unfold.widgets import (
@@ -21,7 +19,7 @@ from unfold.widgets import (
 )
 
 from catalog.models import Color, Material, MaterialKind
-from core.admin import ArchiveAdmin
+from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
 from core.admin_utils import (
     CostVisibilityMixin,
     can_view_cost,
@@ -32,12 +30,13 @@ from core.admin_utils import (
     render_cost_tree,
     thumbnail,
 )
+from core.forms import ActiveChoicesForm
 from core.models import Size
 from costing.services import model_tree, part_tree, variant_tree
 from gallery.admin import ModelPhotoInline, PartPhotoInline, PhotoUploaderMixin, VariantPhotoInline
 from gallery.models import main_photo
 
-from . import generators
+from . import generators, services
 from .models import (
     Coloring,
     ModelComponent,
@@ -75,16 +74,14 @@ class ProductCategoryAdmin(ArchiveAdmin):
 # --- Детали ------------------------------------------------------------------------
 
 
-class PartOperationInline(TabularInline):
+class PartOperationInline(LineInline):
     model = PartOperation
-    extra = 0
-    tab = True
     fields = ("operation_type", "minutes", "rate")
     verbose_name_plural = "Обработка"
 
 
 @admin.register(Part)
-class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, SimpleHistoryAdmin, ArchiveAdmin):
+class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAdmin):
     list_display = (
         "name",
         "code",
@@ -164,8 +161,21 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, SimpleHistoryAdmin, Arc
             or "Пока ни в одной модели"
         )
 
-    @action(description="Копировать деталь", icon="content_copy", url_path="copy-part")
-    def copy_part(self, request, object_id):
+    def has_copy_permission(self, request, object_id=None):
+        return request.user.has_perm("production.add_part")
+
+    @action(
+        description="Копировать деталь",
+        icon="content_copy",
+        url_path="copy-part",
+        permissions=["copy"],
+        dialog={
+            "title": "Копировать деталь",
+            "description": "Создастся копия со всеми параметрами и операциями обработки.",
+            "form_submit_text": "Копировать",
+        },
+    )
+    def copy_part(self, request, form, object_id):
         part = get_object_or_404(Part, pk=object_id)
         copy = generators.copy_part(part)
         messages.success(request, f"Создана копия «{copy.name}». Поменяйте название и параметры.")
@@ -197,29 +207,23 @@ class ModelPartFormSet(BaseInlineFormSet):
             categories[slot] = (category.pk, category)
 
 
-class ModelPartInline(TabularInline):
+class ModelPartInline(LineInline):
     model = ModelPart
     formset = ModelPartFormSet
-    extra = 0
-    tab = True
     autocomplete_fields = ("part",)
     fields = ("part", "quantity", "slot")
     verbose_name_plural = "Детали"
 
 
-class ModelComponentInline(TabularInline):
+class ModelComponentInline(LineInline):
     model = ModelComponent
-    extra = 0
-    tab = True
     autocomplete_fields = ("material",)
     fields = ("material", "quantity")
     verbose_name_plural = "Покупное"
 
 
-class ModelOperationInline(TabularInline):
+class ModelOperationInline(LineInline):
     model = ModelOperation
-    extra = 0
-    tab = True
     fields = ("operation_type", "minutes", "rate")
     verbose_name_plural = "Сборка"
 
@@ -267,12 +271,13 @@ class ColorVariantsForm(BaseDialogForm):
             available = set(material.material_colors.values_list("color_id", flat=True))
             missing = [c.name for c in colors if c.pk not in available]
             if missing:
-                raise ValidationError(
+                self.add_error(
+                    "colors",
                     f"У материала «{material}» нет цветов: {', '.join(missing)}. "
-                    "Добавьте их в карточке материала."
+                    "Добавьте их в карточке материала.",
                 )
         if not colors and not data.get("add_random"):
-            raise ValidationError("Отметьте хотя бы один цвет или «Ассорти».")
+            self.add_error("colors", "Отметьте хотя бы один цвет или «Ассорти».")
         return data
 
 
@@ -321,7 +326,7 @@ class SizeForm(BaseDialogForm):
 
 
 @admin.register(ProductModel)
-class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, SimpleHistoryAdmin, ArchiveAdmin):
+class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAdmin):
     list_display = (
         "photo",
         "name",
@@ -474,12 +479,46 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, SimpleHistoryAd
     def cost_tree(self, obj):
         return render_cost_tree(model_tree(obj)) if obj.pk else "Посчитается после сохранения"
 
+    def save_related(self, request, form, formsets, change):
+        """Переименование слота не должно стирать цвета вариантов (см. services)."""
+        model = form.instance
+        before = services.snapshot_slots(model) if change else {}
+        renames: dict[str, str] = {}
+        for formset in formsets:
+            if formset.model is not ModelPart:
+                continue
+            for line_form in formset.forms:
+                if not getattr(line_form, "cleaned_data", None) or line_form.cleaned_data.get(
+                    "DELETE"
+                ):
+                    continue
+                old = clean_slot(line_form.initial.get("slot") or "")
+                new = clean_slot(line_form.cleaned_data.get("slot") or "")
+                if old and new and old != new:
+                    renames[old] = new
+        super().save_related(request, form, formsets, change)
+        if renames:
+            still_present = set(model.slot_names())
+            renames = {o: n for o, n in renames.items() if o not in still_present}
+            services.restore_renamed_slots(model, before, renames)
+
     # --- Генераторы ---
+
+    def has_generate_permission(self, request, object_id=None):
+        return request.user.has_perm("production.add_variant") and request.user.has_perm(
+            "sales.add_product"
+        )
+
+    def has_generate_size_permission(self, request, object_id=None):
+        return request.user.has_perm(
+            "production.add_productmodel"
+        ) and self.has_generate_permission(request)
 
     @action(
         description="Создать варианты",
         icon="palette",
         url_path="create-variants",
+        permissions=["generate"],
         dialog={
             "title": "Варианты по цветам",
             "description": "Для каждого цвета создастся одноцветный вариант модели.",
@@ -490,7 +529,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, SimpleHistoryAd
     def create_variants(self, request, form, object_id):
         model = form.model_obj
         try:
-            variants, products = generators.create_color_variants(
+            variants, products, skipped = generators.create_color_variants(
                 model,
                 form.cleaned_data["material"],
                 list(form.cleaned_data["colors"]),
@@ -500,15 +539,20 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, SimpleHistoryAd
         except ValidationError as error:
             messages.error(request, " ".join(error.messages))
         else:
-            messages.success(
-                request, f"Создано вариантов: {len(variants)}, поштучных товаров: {len(products)}."
-            )
+            if variants:
+                messages.success(
+                    request,
+                    f"Создано вариантов: {len(variants)}, поштучных товаров: {len(products)}.",
+                )
+            if skipped:
+                messages.warning(request, "Уже есть, пропущено: " + ", ".join(skipped) + ".")
         return hx_redirect(request, _admin_url(model))
 
     @action(
         description="Создать набор",
         icon="inventory_2",
         url_path="create-set",
+        permissions=["generate"],
         dialog={
             "title": "Набор из нескольких штук",
             "form_class": SetForm,
@@ -535,6 +579,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, SimpleHistoryAd
         description="Создать размер",
         icon="straighten",
         url_path="create-size",
+        permissions=["generate_size"],
         dialog={
             "title": "Новый размер модели",
             "description": "Скопируется состав и варианты. Затем поменяйте детали и количества.",
@@ -556,7 +601,13 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, SimpleHistoryAd
 # --- Варианты ----------------------------------------------------------------------
 
 
-class VariantSlotForm(forms.ModelForm):
+class VariantSlotForm(ActiveChoicesForm):
+    """
+    Материал — из категории детали слота; цвет — из палитр всех этих материалов,
+    чтобы материал и цвет можно было сменить за одно сохранение. Что цвет есть именно
+    у выбранного материала, проверяет VariantSlot.clean().
+    """
+
     class Meta:
         model = VariantSlot
         fields = ("material", "color")
@@ -564,22 +615,22 @@ class VariantSlotForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         slot = self.instance
-        if slot.pk:
-            default = slot.variant.model.slot_default_materials().get(slot.slot)
-            if default:
-                self.fields["material"].queryset = Material.objects.filter(
-                    is_active=True, category_id=default.category_id
-                )
-            self.fields["color"].queryset = Color.objects.filter(
-                is_active=True, materials=slot.material
-            )
+        if not slot.pk:
+            return
+        default = slot.variant.model.slot_default_materials().get(slot.slot)
+        materials = self.fields["material"].queryset
+        if default:
+            materials = materials.filter(category_id=default.category_id)
+            self.fields["material"].queryset = materials
+        self.fields["color"].queryset = Color.objects.filter(
+            is_active=True, materials__in=materials
+        ).distinct()
+        self.fields["color"].help_text = "Цвет должен быть в палитре выбранного материала."
 
 
-class VariantSlotInline(TabularInline):
+class VariantSlotInline(LineInline):
     model = VariantSlot
     form = VariantSlotForm
-    extra = 0
-    tab = True
     can_delete = False
     fields = ("slot", "material", "color", "swatch")
     readonly_fields = ("slot", "swatch")
@@ -594,7 +645,7 @@ class VariantSlotInline(TabularInline):
 
 
 @admin.register(Variant)
-class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, SimpleHistoryAdmin, ArchiveAdmin):
+class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAdmin):
     list_display = ("swatches", "__str__", "code", "coloring", "cost_display", "is_active")
     list_display_links = ("swatches", "__str__")
     list_filter = ("coloring", "model")

@@ -73,7 +73,6 @@ class MaterialCategory(UniqueNameModel):
         blank=True,
         on_delete=models.PROTECT,
         related_name="children",
-        limit_choices_to={"is_active": True},
     )
     kind = models.CharField(
         "Вид материала",
@@ -144,7 +143,6 @@ class Material(UniqueNameModel):
         verbose_name="Категория",
         on_delete=models.PROTECT,
         related_name="materials",
-        limit_choices_to={"is_active": True},
     )
     unit = models.CharField("Единица расхода", max_length=10, choices=Unit.choices)
     pack_size = positive_decimal_field(
@@ -203,7 +201,6 @@ class MaterialColor(models.Model):
         Color,
         verbose_name="Цвет",
         on_delete=models.PROTECT,
-        limit_choices_to={"is_active": True},
     )
     vendor_code = models.CharField("Код у производителя", max_length=50, blank=True)
     available = models.BooleanField("Есть в продаже", default=True)
@@ -223,7 +220,7 @@ class MaterialColor(models.Model):
 class MaterialPriceHistory(models.Model):
     """История цен материала. Заполняется автоматически, не редактируется."""
 
-    material = models.ForeignKey(Material, on_delete=models.CASCADE, related_name="price_history")
+    material = models.ForeignKey(Material, on_delete=models.PROTECT, related_name="price_history")
     changed_at = models.DateTimeField("Дата", auto_now_add=True)
     pack_size = models.DecimalField("Размер упаковки", max_digits=14, decimal_places=4)
     pack_price = models.DecimalField("Цена упаковки, ₸", max_digits=14, decimal_places=2)
@@ -243,6 +240,14 @@ class MaterialPriceHistory(models.Model):
 
     def __str__(self):
         return f"{self.material}: {self.pack_price} ₸ от {self.changed_at:%d.%m.%Y}"
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ValidationError("Историю цен изменить нельзя.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Историю цен удалить нельзя.")
 
 
 class Equipment(UniqueNameModel):

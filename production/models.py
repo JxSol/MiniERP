@@ -65,7 +65,6 @@ class ProductCategory(UniqueNameModel):
         blank=True,
         on_delete=models.PROTECT,
         related_name="children",
-        limit_choices_to={"is_active": True},
     )
     path = models.CharField(max_length=500, editable=False, db_index=True)
 
@@ -113,14 +112,13 @@ class Part(UniqueNameModel):
         verbose_name="Станок",
         on_delete=models.PROTECT,
         related_name="parts",
-        limit_choices_to={"is_active": True},
     )
     material = models.ForeignKey(
         Material,
         verbose_name="Материал по умолчанию",
         on_delete=models.PROTECT,
         related_name="parts",
-        limit_choices_to={"is_active": True, "category__kind__in": PRODUCTION_KINDS},
+        limit_choices_to={"category__kind__in": PRODUCTION_KINDS},
         help_text="В вариантах модели материал детали со слотом можно заменить на совместимый.",
     )
     batch_material_qty = positive_decimal_field(
@@ -179,7 +177,7 @@ class PartOperation(models.Model):
         OperationType,
         verbose_name="Операция",
         on_delete=models.PROTECT,
-        limit_choices_to={"is_active": True, "level": OperationLevel.PART},
+        limit_choices_to={"level": OperationLevel.PART},
     )
     minutes = _minutes_field()
     rate = _rate_field()
@@ -212,11 +210,8 @@ class ProductModel(UniqueNameModel):
         blank=True,
         on_delete=models.PROTECT,
         related_name="models",
-        limit_choices_to={"is_active": True},
     )
-    tags = models.ManyToManyField(
-        Tag, verbose_name="Метки", blank=True, limit_choices_to={"is_active": True}
-    )
+    tags = models.ManyToManyField(Tag, verbose_name="Метки", blank=True)
     status = models.CharField(
         "Статус", max_length=10, choices=ModelStatus.choices, default=ModelStatus.DRAFT
     )
@@ -230,7 +225,7 @@ class ProductModel(UniqueNameModel):
         blank=True,
         on_delete=models.PROTECT,
         related_name="+",
-        limit_choices_to={"is_active": True, "category__kind": MaterialKind.PACKAGING},
+        limit_choices_to={"category__kind": MaterialKind.PACKAGING},
         help_text="Подставляется в поштучные товары этой модели.",
     )
     default_packing_minutes = models.DecimalField(
@@ -256,7 +251,6 @@ class ProductModel(UniqueNameModel):
         null=True,
         blank=True,
         on_delete=models.PROTECT,
-        limit_choices_to={"is_active": True},
     )
     marketplace_group = models.CharField(
         "Группа на площадках",
@@ -301,11 +295,15 @@ class ProductModel(UniqueNameModel):
                 raise ValidationError(
                     {"base_model": "Базовой может быть только модель без размера."}
                 )
+            if self.pk and self.sizes.exists():
+                raise ValidationError(
+                    {"base_model": "У этой модели уже есть размеры — она сама базовая."}
+                )
 
     def slot_names(self) -> list[str]:
         """Цветовые слоты модели в порядке появления в составе."""
         names: list[str] = []
-        for line in self.model_parts.all():
+        for line in self.model_parts.order_by("pk"):
             if line.slot and line.slot not in names:
                 names.append(line.slot)
         return names
@@ -313,7 +311,7 @@ class ProductModel(UniqueNameModel):
     def slot_default_materials(self) -> dict[str, Material]:
         """Материал по умолчанию для каждого слота — из первой детали слота."""
         result: dict[str, Material] = {}
-        for line in self.model_parts.select_related("part__material__category"):
+        for line in self.model_parts.select_related("part__material__category").order_by("pk"):
             if line.slot and line.slot not in result:
                 result[line.slot] = line.part.material
         return result
@@ -326,7 +324,6 @@ class ModelPart(models.Model):
         verbose_name="Деталь",
         on_delete=models.PROTECT,
         related_name="model_lines",
-        limit_choices_to={"is_active": True},
     )
     quantity = models.PositiveIntegerField("Кол-во", default=1, validators=[MinValueValidator(1)])
     slot = models.CharField(
@@ -355,7 +352,7 @@ class ModelComponent(models.Model):
         verbose_name="Комплектующее",
         on_delete=models.PROTECT,
         related_name="model_components",
-        limit_choices_to={"is_active": True, "category__kind__in": COMPONENT_KINDS},
+        limit_choices_to={"category__kind__in": COMPONENT_KINDS},
     )
     quantity = positive_decimal_field("Кол-во на 1 шт")
 
@@ -373,7 +370,7 @@ class ModelOperation(models.Model):
         OperationType,
         verbose_name="Операция",
         on_delete=models.PROTECT,
-        limit_choices_to={"is_active": True, "level": OperationLevel.MODEL},
+        limit_choices_to={"level": OperationLevel.MODEL},
     )
     minutes = _minutes_field()
     rate = _rate_field()
@@ -469,7 +466,7 @@ class VariantSlot(models.Model):
         verbose_name="Материал",
         on_delete=models.PROTECT,
         related_name="variant_slots",
-        limit_choices_to={"is_active": True, "category__kind__in": PRODUCTION_KINDS},
+        limit_choices_to={"category__kind__in": PRODUCTION_KINDS},
     )
     color = models.ForeignKey(
         Color,
@@ -477,7 +474,6 @@ class VariantSlot(models.Model):
         null=True,
         blank=True,
         on_delete=models.PROTECT,
-        limit_choices_to={"is_active": True},
     )
 
     class Meta:

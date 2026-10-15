@@ -9,7 +9,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from catalog.models import Color, Material, OperationType
-from core.models import Size
+from core.models import Size, name_key
 from sales.models import Product, ProductItem, ProductKind, ProductOperation, ProductPackaging
 
 from .models import (
@@ -50,7 +50,7 @@ def create_single_product(variant: Variant) -> Product | None:
     name = f"{model.name} — {variant.name}"
     if (
         Product.objects.filter(sku=sku).exists()
-        or Product.objects.filter(name__iexact=name).exists()
+        or Product.objects.filter(name_key=name_key(name)).exists()
     ):
         return None
     product = Product.objects.create(sku=sku, name=name, kind=ProductKind.SINGLE)
@@ -77,7 +77,7 @@ def create_color_variants(
     *,
     add_random: bool = False,
     create_products: bool = True,
-) -> tuple[list[Variant], list[Product]]:
+) -> tuple[list[Variant], list[Product], list[str]]:
     """
     Одноцветные варианты: во все слоты модели — выбранный материал и цвет.
     Варианты с уже существующим кодом пропускаются.
@@ -91,11 +91,14 @@ def create_color_variants(
             "Многоцветные варианты создайте вручную."
         )
 
-    existing = set(model.variants.values_list("code", flat=True))
+    existing_codes = set(model.variants.values_list("code", flat=True))
+    existing_names = set(model.variants.values_list("name_key", flat=True))
     variants: list[Variant] = []
+    skipped: list[str] = []
 
     def make(name: str, code: str, coloring: str, color: Color | None):
-        if code in existing:
+        if code in existing_codes or name_key(name) in existing_names:
+            skipped.append(name)
             return
         variant = Variant.objects.create(model=model, name=name, code=code, coloring=coloring)
         variant.slots.update(material=material, color=color)
@@ -112,7 +115,7 @@ def create_color_variants(
             product = create_single_product(variant)
             if product:
                 products.append(product)
-    return variants, products
+    return variants, products, skipped
 
 
 # --- Наборы ------------------------------------------------------------------------
@@ -219,7 +222,7 @@ def copy_part(part: Part) -> Part:
     n = 2
     while (
         Part.objects.filter(code=f"{part.code}-{n}").exists()
-        or Part.objects.filter(name__iexact=f"{part.name} (копия {n})").exists()
+        or Part.objects.filter(name_key=name_key(f"{part.name} (копия {n})")).exists()
     ):
         n += 1
     copy = Part.objects.create(

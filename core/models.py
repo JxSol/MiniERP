@@ -9,6 +9,7 @@ from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
+from simple_history.models import HistoricalRecords
 
 # --- Нормализация названий и кодов (защита от дублей, ТЗ п. 5.6) ---------------
 
@@ -151,6 +152,8 @@ class SiteSettings(models.Model):
         "Адрес системы для QR-ссылок", blank=True, help_text="Например, https://erp.example.kz"
     )
 
+    history = HistoricalRecords()
+
     class Meta:
         verbose_name = "Общие настройки"
         verbose_name_plural = "Общие настройки"
@@ -179,6 +182,7 @@ class Tag(UniqueNameModel):
         verbose_name = "Метка"
         verbose_name_plural = "Метки"
         ordering = ["name"]
+        constraints = [models.UniqueConstraint(fields=["name_key"], name="core_tag_name_uniq")]
 
 
 class Size(UniqueNameModel):
@@ -191,3 +195,4 @@ class Size(UniqueNameModel):
         verbose_name = "Размер"
         verbose_name_plural = "Размеры"
         ordering = ["order", "name"]
+        constraints = [models.UniqueConstraint(fields=["name_key"], name="core_size_name_uniq")]

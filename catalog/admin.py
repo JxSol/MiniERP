@@ -1,12 +1,10 @@
 from django import forms
 from django.contrib import admin
 from django.utils.html import format_html, format_html_join, mark_safe
-from simple_history.admin import SimpleHistoryAdmin
-from unfold.admin import TabularInline
 from unfold.decorators import display
 from unfold.widgets import UnfoldAdminColorInputWidget
 
-from core.admin import ArchiveAdmin
+from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
 from core.admin_utils import color_swatch, fmt_money, fmt_number
 
 from .models import (
@@ -77,19 +75,15 @@ class ColorAdmin(ArchiveAdmin):
 # --- Материалы ---------------------------------------------------------------------
 
 
-class MaterialColorInline(TabularInline):
+class MaterialColorInline(LineInline):
     model = MaterialColor
-    extra = 0
-    tab = True
     autocomplete_fields = ("color",)
     fields = ("color", "vendor_code", "available")
     verbose_name_plural = "Цвета материала (из палитры)"
 
 
-class PriceHistoryInline(TabularInline):
+class PriceHistoryInline(LineInline):
     model = MaterialPriceHistory
-    extra = 0
-    tab = True
     can_delete = False
     fields = ("changed_at", "pack_size", "pack_price", "unit_price_display", "changed_by")
     readonly_fields = fields
@@ -104,7 +98,7 @@ class PriceHistoryInline(TabularInline):
 
 
 @admin.register(Material)
-class MaterialAdmin(SimpleHistoryAdmin, ArchiveAdmin):
+class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
     list_display = (
         "name",
         "category",
@@ -201,7 +195,7 @@ class MaterialAdmin(SimpleHistoryAdmin, ArchiveAdmin):
 
 
 @admin.register(Equipment)
-class EquipmentAdmin(SimpleHistoryAdmin, ArchiveAdmin):
+class EquipmentAdmin(HistoryAdmin, ArchiveAdmin):
     list_display = (
         "name",
         "technology",
@@ -262,7 +256,7 @@ class EquipmentAdmin(SimpleHistoryAdmin, ArchiveAdmin):
 
 
 @admin.register(OperationType)
-class OperationTypeAdmin(SimpleHistoryAdmin, ArchiveAdmin):
+class OperationTypeAdmin(HistoryAdmin, ArchiveAdmin):
     list_display = ("name", "level", "rate_display", "default_minutes", "order", "is_active")
     list_filter = ("level",)
     list_editable = ("order",)

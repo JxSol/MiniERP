@@ -49,9 +49,7 @@ class Product(UniqueNameModel):
         default=ProductStatus.DRAFT,
         help_text="Активным товар становится, только когда заполнено всё обязательное.",
     )
-    tags = models.ManyToManyField(
-        Tag, verbose_name="Метки", blank=True, limit_choices_to={"is_active": True}
-    )
+    tags = models.ManyToManyField(Tag, verbose_name="Метки", blank=True)
     common_barcode = models.CharField(
         "Общий штрихкод",
         max_length=14,
@@ -152,7 +150,6 @@ class ProductItem(models.Model):
         verbose_name="Вариант",
         on_delete=models.PROTECT,
         related_name="product_items",
-        limit_choices_to={"is_active": True},
     )
     quantity = models.PositiveIntegerField("Кол-во", default=1, validators=[MinValueValidator(1)])
 
@@ -174,7 +171,7 @@ class ProductPackaging(models.Model):
         verbose_name="Упаковка",
         on_delete=models.PROTECT,
         related_name="product_packaging",
-        limit_choices_to={"is_active": True, "category__kind": MaterialKind.PACKAGING},
+        limit_choices_to={"category__kind": MaterialKind.PACKAGING},
     )
     quantity = positive_decimal_field("Кол-во", default=Decimal(1))
 
@@ -192,7 +189,7 @@ class ProductOperation(models.Model):
         OperationType,
         verbose_name="Операция",
         on_delete=models.PROTECT,
-        limit_choices_to={"is_active": True, "level": OperationLevel.PRODUCT},
+        limit_choices_to={"level": OperationLevel.PRODUCT},
     )
     minutes = models.DecimalField(
         "Время на 1 товар, мин",
@@ -213,7 +210,7 @@ class ProductOperation(models.Model):
 class CostSnapshot(models.Model):
     """Зафиксированная себестоимость. Не редактируется и не удаляется (ТЗ п. 5.6)."""
 
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="snapshots")
+    product = models.ForeignKey(Product, on_delete=models.PROTECT, related_name="snapshots")
     created_at = models.DateTimeField("Дата фиксации", auto_now_add=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

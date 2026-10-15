@@ -1,12 +1,11 @@
 from django.contrib import admin, messages
+from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils.html import format_html
-from simple_history.admin import SimpleHistoryAdmin
-from unfold.admin import TabularInline
 from unfold.decorators import action, display
 from unfold.widgets import UnfoldAdminCheckboxSelectMultipleWidget
 
-from core.admin import ArchiveAdmin
+from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
 from core.admin_utils import (
     COST_PERMISSION,
     CostVisibilityMixin,
@@ -32,36 +31,28 @@ from .models import (
 )
 
 
-class ProductItemInline(TabularInline):
+class ProductItemInline(LineInline):
     model = ProductItem
-    extra = 0
-    tab = True
     autocomplete_fields = ("variant",)
     fields = ("variant", "quantity")
     verbose_name_plural = "Состав"
 
 
-class ProductPackagingInline(TabularInline):
+class ProductPackagingInline(LineInline):
     model = ProductPackaging
-    extra = 0
-    tab = True
     autocomplete_fields = ("material",)
     fields = ("material", "quantity")
     verbose_name_plural = "Упаковка"
 
 
-class ProductOperationInline(TabularInline):
+class ProductOperationInline(LineInline):
     model = ProductOperation
-    extra = 0
-    tab = True
     fields = ("operation_type", "minutes", "rate")
     verbose_name_plural = "Комплектация"
 
 
-class CostSnapshotInline(TabularInline):
+class CostSnapshotInline(LineInline):
     model = CostSnapshot
-    extra = 0
-    tab = True
     can_delete = False
     shows_cost = True
     fields = ("created_at", "created_by", "direct_display", "total_display")
@@ -92,7 +83,7 @@ def _growth(product: Product):
 
 
 @admin.register(Product)
-class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, SimpleHistoryAdmin, ArchiveAdmin):
+class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAdmin):
     list_display = (
         "photo",
         "sku",
@@ -230,7 +221,9 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, SimpleHistoryAdmin, 
         if product.status == ProductStatus.ACTIVE:
             problems = product.activation_problems()
             if problems:
-                Product.objects.filter(pk=product.pk).update(status=ProductStatus.DRAFT)
+                product.status = ProductStatus.DRAFT
+                product._history_user = request.user
+                product.save(update_fields=["status"])
                 messages.error(
                     request,
                     "Товар сохранён как черновик — для активации не хватает: "
@@ -256,9 +249,14 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, SimpleHistoryAdmin, 
         icon="lock",
         url_path="fix-cost",
         permissions=["fix_cost"],
+        dialog={
+            "title": "Зафиксировать себестоимость",
+            "description": "Текущая себестоимость сохранится как снимок. Снимки не редактируются.",
+            "form_submit_text": "Зафиксировать",
+        },
     )
-    def fix_cost_detail(self, request, object_id):
-        product = Product.objects.get(pk=object_id)
+    def fix_cost_detail(self, request, form, object_id):
+        product = get_object_or_404(Product, pk=object_id)
         snapshot = fix_cost(product, request.user)
         messages.success(request, f"Себестоимость зафиксирована: {fmt_money(snapshot.total)}.")
         return hx_redirect(request, reverse("admin:sales_product_change", args=[object_id]))

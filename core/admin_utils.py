@@ -168,19 +168,39 @@ class CostVisibilityMixin:
 
     cost_fields: tuple[str, ...] = ()
 
-    def changeform_view(self, request, *args, **kwargs):
+    # Поля модели, по которым нельзя фильтровать и сортировать без права на себестоимость
+    cost_model_fields: tuple[str, ...] = ("cost_cached", "cost_direct_cached")
+
+    def _with_request(self, request, view, *args, **kwargs):
+        """Вычисляемые поля рендерятся после возврата из view, поэтому рендерим здесь же."""
         token = current_request.set(request)
         try:
-            return super().changeform_view(request, *args, **kwargs)
+            response = view(request, *args, **kwargs)
+            if hasattr(response, "render") and callable(response.render):
+                response.render()
+            return response
         finally:
             current_request.reset(token)
 
+    def changeform_view(self, request, *args, **kwargs):
+        return self._with_request(request, super().changeform_view, *args, **kwargs)
+
     def changelist_view(self, request, *args, **kwargs):
-        token = current_request.set(request)
-        try:
-            return super().changelist_view(request, *args, **kwargs)
-        finally:
-            current_request.reset(token)
+        return self._with_request(request, super().changelist_view, *args, **kwargs)
+
+    def lookup_allowed(self, lookup, value, request=None):
+        """Без права на себестоимость запрещены фильтры вида ?cost_cached__gt= (утечка подбором)."""
+        if lookup.split("__")[0] in self.cost_model_fields and not can_view_cost(request):
+            return False
+        return super().lookup_allowed(lookup, value, request)
+
+    def get_sortable_by(self, request):
+        sortable = super().get_sortable_by(request)
+        if can_view_cost(request):
+            return sortable
+        return [
+            f for f in sortable if f not in self.cost_fields and f not in self.cost_model_fields
+        ]
 
     def get_list_display(self, request):
         fields = super().get_list_display(request)
