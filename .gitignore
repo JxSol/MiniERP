@@ -20,3 +20,6 @@ Thumbs.db
 
 # Р›РѕРєР°Р»СЊРЅС‹Рµ РЅР°СЃС‚СЂРѕР№РєРё Claude Code
 .claude/launch.json
+
+# Логи локального сервера
+runserver*.log

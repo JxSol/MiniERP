@@ -6,7 +6,7 @@ from unfold.decorators import display
 from unfold.widgets import UnfoldAdminColorInputWidget
 
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
-from core.admin_utils import color_swatch, fmt_money, fmt_number
+from core.admin_utils import color_swatch, fmt_money, fmt_number, fmt_price
 
 from .models import (
     Color,
@@ -95,7 +95,7 @@ class PriceHistoryInline(LineInline):
 
     @display(description="Цена за единицу")
     def unit_price_display(self, obj):
-        return fmt_money(obj.unit_price, 4)
+        return fmt_price(obj.unit_price)
 
 
 @admin.register(Material)
@@ -155,7 +155,7 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
     def unit_price_display(self, obj):
         if not obj.pk and obj.pack_price is None:
             return "—"
-        return f"{fmt_money(obj.unit_price, 4)} / {obj.get_unit_display()}"
+        return f"{fmt_price(obj.unit_price)} / {obj.get_unit_display()}"
 
     @display(description="Закупка")
     def pack_display(self, obj):

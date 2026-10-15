@@ -31,6 +31,18 @@ def fmt_money(value: Decimal | None, digits: int = 2) -> str:
     return f"{text} ₸"
 
 
+def fmt_price(value: Decimal | None) -> str:
+    """Цена за единицу: без лишних нулей — «15 ₸», «9 ₸», «0,0375 ₸» (до 4 знаков)."""
+    if value is None:
+        return "—"
+    quantized = Decimal(value).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    text = f"{quantized:f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    digits = len(text.split(".")[1]) if "." in text else 0
+    return fmt_money(quantized, digits)
+
+
 def fmt_duration(minutes: Decimal | None) -> str:
     """480 → «8 ч», 90 → «1 ч 30 мин», 12.5 → «12,5 мин»."""
     if minutes is None:
