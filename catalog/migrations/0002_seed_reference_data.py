@@ -36,30 +36,38 @@ MATERIAL_CATEGORIES = [
 ]
 
 COLORS = [
-    ("Белый", "WH", "#FFFFFF"),
-    ("Чёрный", "BK", "#1A1A1A"),
-    ("Серый", "GY", "#8E8E8E"),
-    ("Красный", "RD", "#D32F2F"),
-    ("Оранжевый", "OR", "#F57C00"),
-    ("Жёлтый", "YL", "#FBC02D"),
-    ("Зелёный", "GN", "#388E3C"),
-    ("Синий", "BL", "#1976D2"),
-    ("Голубой", "LB", "#64B5F6"),
-    ("Фиолетовый", "VT", "#7B1FA2"),
-    ("Розовый", "PK", "#F48FB1"),
-    ("Коричневый", "BR", "#6D4C41"),
-    ("Бежевый", "BG", "#E8D9B5"),
-    ("Мятный", "MT", "#A8E6CF"),
-    ("Лавандовый", "LV", "#C5B3E6"),
-    ("Персиковый", "PC", "#FFCBA4"),
-    ("Золотой", "GD", "#D4AF37"),
-    ("Серебряный", "SV", "#C0C0C0"),
-    ("Бронзовый", "BZ", "#CD7F32"),
-    ("Прозрачный", "CL", "#F0F8FF"),
-    ("Натуральный", "NT", "#F3EFE0"),
+    ("Белый", "#FFFFFF"),
+    ("Чёрный", "#1A1A1A"),
+    ("Серый", "#8E8E8E"),
+    ("Красный", "#D32F2F"),
+    ("Оранжевый", "#F57C00"),
+    ("Жёлтый", "#FBC02D"),
+    ("Зелёный", "#388E3C"),
+    ("Синий", "#1976D2"),
+    ("Голубой", "#64B5F6"),
+    ("Фиолетовый", "#7B1FA2"),
+    ("Розовый", "#F48FB1"),
+    ("Коричневый", "#6D4C41"),
+    ("Бежевый", "#E8D9B5"),
+    ("Мятный", "#A8E6CF"),
+    ("Лавандовый", "#C5B3E6"),
+    ("Персиковый", "#FFCBA4"),
+    ("Золотой", "#D4AF37"),
+    ("Серебряный", "#C0C0C0"),
+    ("Бронзовый", "#CD7F32"),
+    ("Прозрачный", "#F0F8FF"),
+    ("Натуральный", "#F3EFE0"),
 ]
 
-SIZES = [("XS", "XS"), ("S", "S"), ("M", "M"), ("L", "L"), ("XL", "XL"), ("XXL", "XXL")]
+SIZES = ["XS", "S", "M", "L", "XL", "XXL"]
+MANUFACTURERS = ["Bambu Lab", "eSun", "Creality", "Polymaker", "Sunlu", "Elegoo", "Anycubic"]
+SUPPLIERS = [
+    ("Kaspi", "https://kaspi.kz"),
+    ("Ozon", "https://ozon.kz"),
+    ("Wildberries", "https://wildberries.kz"),
+    ("AliExpress", "https://aliexpress.com"),
+    ("Местный магазин", ""),
+]
 TAGS = ["Новинка", "Хит", "Новый год", "Подарок", "Для детей"]
 
 
@@ -67,6 +75,8 @@ def seed(apps, schema_editor):
     OperationType = apps.get_model("catalog", "OperationType")
     MaterialCategory = apps.get_model("catalog", "MaterialCategory")
     Color = apps.get_model("catalog", "Color")
+    Manufacturer = apps.get_model("catalog", "Manufacturer")
+    Supplier = apps.get_model("catalog", "Supplier")
     Size = apps.get_model("core", "Size")
     Tag = apps.get_model("core", "Tag")
     SiteSettings = apps.get_model("core", "SiteSettings")
@@ -91,11 +101,17 @@ def seed(apps, schema_editor):
                 path=f"{root_name} → {child}",
             )
 
-    for order, (name, code, hex_) in enumerate(COLORS):
-        Color.objects.create(name=name, name_key=name_key(name), code=code, hex=hex_, order=order)
+    for order, (name, hex_) in enumerate(COLORS):
+        Color.objects.create(name=name, name_key=name_key(name), hex=hex_, order=order)
 
-    for order, (name, code) in enumerate(SIZES):
-        Size.objects.create(name=name, name_key=name_key(name), code=code, order=order)
+    for order, name in enumerate(SIZES):
+        Size.objects.create(name=name, name_key=name_key(name), order=order)
+
+    for name in MANUFACTURERS:
+        Manufacturer.objects.create(name=name, name_key=name_key(name))
+
+    for name, url in SUPPLIERS:
+        Supplier.objects.create(name=name, name_key=name_key(name), url=url)
 
     for name in TAGS:
         Tag.objects.create(name=name, name_key=name_key(name))

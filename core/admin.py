@@ -103,10 +103,10 @@ class TagAdmin(ArchiveAdmin):
 
 @admin.register(Size)
 class SizeAdmin(ArchiveAdmin):
-    list_display = ("name", "code", "order", "is_active")
+    list_display = ("name", "order", "is_active")
     list_editable = ("order",)
-    search_fields = ("name", "code")
-    fields = ("name", "code", "order", "is_active", "notes")
+    search_fields = ("name",)
+    fields = ("name", "order", "is_active", "notes")
 
 
 class LineInline(TabularInline):

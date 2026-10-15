@@ -12,8 +12,15 @@ from django.db import models
 from simple_history.models import HistoricalRecords
 
 from catalog.models import Material, MaterialKind, OperationLevel, OperationType
-from core.models import CodeField, Tag, UniqueNameModel, money_field, positive_decimal_field
-from production.models import Coloring, Variant
+from core.models import (
+    CodeField,
+    Tag,
+    UniqueNameModel,
+    money_field,
+    next_code,
+    positive_decimal_field,
+)
+from production.models import Variant
 
 
 def validate_barcode(value: str):
@@ -38,7 +45,7 @@ class ProductStatus(models.TextChoices):
 
 
 class Product(UniqueNameModel):
-    sku = CodeField("Артикул (SKU)", unique=True)
+    sku = CodeField("Артикул (SKU)", unique=True)  # SKU-0000001, генерируется
     kind = models.CharField(
         "Вид", max_length=10, choices=ProductKind.choices, default=ProductKind.SINGLE
     )
@@ -133,14 +140,12 @@ class Product(UniqueNameModel):
             problems.append("не указаны габариты в упаковке")
         if not self.weight_g:
             problems.append("не указан вес в упаковке")
-        for item in items:
-            if item.variant.coloring == Coloring.FIXED:
-                missing = item.variant.missing_colors()
-                if missing:
-                    problems.append(
-                        f"у варианта «{item.variant}» не выбран цвет: {', '.join(missing)}"
-                    )
         return problems
+
+    def save(self, *args, **kwargs):
+        if not self.sku:
+            self.sku = next_code("SKU")
+        super().save(*args, **kwargs)
 
 
 class ProductItem(models.Model):

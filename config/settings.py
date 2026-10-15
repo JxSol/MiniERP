@@ -191,6 +191,18 @@ UNFOLD = {
                         "view_color",
                     ),
                     _item(
+                        "Производители",
+                        "factory",
+                        "admin:catalog_manufacturer_changelist",
+                        "view_manufacturer",
+                    ),
+                    _item(
+                        "Поставщики",
+                        "storefront",
+                        "admin:catalog_supplier_changelist",
+                        "view_supplier",
+                    ),
+                    _item(
                         "Оборудование",
                         "print",
                         "admin:catalog_equipment_changelist",

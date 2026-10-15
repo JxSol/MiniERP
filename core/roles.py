@@ -24,6 +24,8 @@ REFERENCE_MODELS = [
     "core.tag",
     "core.size",
     "catalog.color",
+    "catalog.manufacturer",
+    "catalog.supplier",
     "catalog.materialcategory",
     "catalog.equipment",
     "catalog.operationtype",
@@ -42,7 +44,7 @@ WORK_MODELS = [
 
 # Строки внутри основных записей: можно и удалять (убрать деталь из модели и т. п.)
 LINE_MODELS = [
-    "catalog.materialcolor",
+    "catalog.materialoffer",
     "production.partoperation",
     "production.modelpart",
     "production.modelcomponent",

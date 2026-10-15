@@ -13,6 +13,7 @@ from core.admin_utils import (
     fmt_number,
     hx_redirect,
     render_cost_tree,
+    safe_tree,
     thumbnail,
 )
 from core.models import SiteSettings
@@ -104,7 +105,7 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
         ProductPhotoInline,
         CostSnapshotInline,
     )
-    readonly_fields = ("problems_display", "cost_tree", "fixed_display", "growth_display")
+    readonly_fields = ("sku", "problems_display", "cost_tree", "fixed_display", "growth_display")
     cost_fields = ("cost_display", "fixed_display", "growth_display", "cost_tree")
     actions = ("fix_cost_bulk",)
     actions_detail = ("fix_cost_detail",)
@@ -209,7 +210,9 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
     def cost_tree(self, obj):
         if not obj.pk:
             return "Посчитается после сохранения"
-        tree = product_tree(obj)
+        tree = safe_tree(product_tree, obj)
+        if isinstance(tree, Exception):
+            return render_cost_tree(tree)
         return render_cost_tree(
             tree,
             footer=[

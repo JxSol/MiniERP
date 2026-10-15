@@ -45,7 +45,7 @@ def test_cost_lookup_allowed_for_admin(client, admin_user, demo):
 
 
 def test_history_form_post_requires_change_permission(client, demo):
-    product = Product.objects.get(sku="LUNA-WH")
+    product = Product.objects.get(name="Светильник Луна — Белый")
     version = product.history.first()
     client.force_login(user_in(SELLER, "seller"))
     url = reverse("admin:sales_product_simple_history", args=[product.pk, version.history_id])
@@ -65,7 +65,7 @@ def test_settings_history_page_opens(client, admin_user):
 
 
 def test_generators_require_add_permissions(client, demo):
-    luna = ProductModel.objects.get(code="LUNA")
+    luna = ProductModel.objects.get(name="Светильник Луна")
     client.force_login(user_in(OBSERVER, "observer"))
     for name in ("create_variants", "create_set", "create_size"):
         url = reverse(f"admin:production_productmodel_{name}", args=[luna.pk])
@@ -73,14 +73,14 @@ def test_generators_require_add_permissions(client, demo):
     variants_before = Variant.objects.count()
     client.post(
         reverse("admin:production_productmodel_create_variants", args=[luna.pk]),
-        {"material": 1, "colors": [4], "_form_submitted": "on"},
+        {"materials": [1], "_form_submitted": "on"},
     )
     assert Variant.objects.count() == variants_before
 
 
 def test_fix_cost_runs_only_on_post(client, admin_user, demo):
     client.force_login(admin_user)
-    product = Product.objects.get(sku="LUNA-WH")
+    product = Product.objects.get(name="Светильник Луна — Белый")
     url = reverse("admin:sales_product_fix_cost_detail", args=[product.pk])
     assert client.get(url).status_code == 200  # диалог, ничего не создано
     assert CostSnapshot.objects.filter(product=product).count() == 0
@@ -92,7 +92,7 @@ def test_fix_cost_runs_only_on_post(client, admin_user, demo):
 
 def test_variants_tab_shows_cost_to_admin(client, admin_user, demo):
     client.force_login(admin_user)
-    luna = ProductModel.objects.get(code="LUNA")
+    luna = ProductModel.objects.get(name="Светильник Луна")
     html = client.get(
         reverse("admin:production_productmodel_change", args=[luna.pk])
     ).content.decode()
@@ -101,8 +101,8 @@ def test_variants_tab_shows_cost_to_admin(client, admin_user, demo):
 
 def test_dialog_shows_validation_error(client, admin_user, demo):
     client.force_login(admin_user)
-    luna = ProductModel.objects.get(code="LUNA")
+    luna = ProductModel.objects.get(name="Светильник Луна")
     url = reverse("admin:production_productmodel_create_variants", args=[luna.pk])
-    response = client.post(url, {"material": 1, "_form_submitted": "on"})
+    response = client.post(url, {"_form_submitted": "on"})
     assert response.status_code == 200
-    assert "Отметьте хотя бы один цвет" in response.content.decode()
+    assert "Отметьте хотя бы один материал" in response.content.decode()

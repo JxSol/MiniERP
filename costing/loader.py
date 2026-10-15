@@ -12,7 +12,7 @@ from decimal import Decimal
 
 from catalog.models import Equipment, Material, OperationType
 from core.models import SiteSettings
-from production.models import Part, ProductModel, Variant
+from production.models import Coloring, Part, ProductModel, Variant
 from sales.models import Product
 
 from .engine import (
@@ -26,10 +26,19 @@ from .engine import (
 )
 
 
+class CostError(Exception):
+    """Себестоимость посчитать нельзя (например, нет цены у материала)."""
+
+
 class Catalog:
     def __init__(self):
         self.settings = SiteSettings.load()
-        self.materials = {m.pk: m for m in Material.objects.select_related("category")}
+        self.materials = {
+            m.pk: m
+            for m in Material.objects.select_related("category", "color").prefetch_related("offers")
+        }
+        # Средняя цена линейки («PLA Basic» всех цветов) — для вариантов «Ассорти»
+        self._line_prices: dict[tuple[int, str], Decimal | None] = {}
         self.equipment = {e.pk: e for e in Equipment.objects.all()}
         self.operation_types = {o.pk: o for o in OperationType.objects.all()}
         self.parts = {p.pk: p for p in Part.objects.prefetch_related("operations")}
@@ -74,10 +83,32 @@ class Catalog:
             )
         return self._machines[equipment_id]
 
-    def material_use(self, material_id: int, quantity: Decimal) -> MaterialUse:
+    def line_price(self, material: Material) -> Decimal | None:
+        key = (material.category_id, material.line_key)
+        if key not in self._line_prices:
+            prices = [
+                m.unit_price
+                for m in self.materials.values()
+                if m.category_id == material.category_id
+                and m.line_key == material.line_key
+                and m.is_active
+                and m.unit_price is not None
+            ]
+            self._line_prices[key] = sum(prices, Decimal(0)) / len(prices) if prices else None
+        return self._line_prices[key]
+
+    def material_use(
+        self, material_id: int, quantity: Decimal, *, any_color: bool = False
+    ) -> MaterialUse:
         m = self.materials[material_id]
+        if any_color:
+            name, price = f"{m.name}, любой цвет", self.line_price(m)
+        else:
+            name, price = m.full_name, m.unit_price
+        if price is None:
+            raise CostError(f"У материала «{name}» нет актуальных предложений с ценой.")
         return MaterialUse(
-            name=m.name, quantity=quantity, unit=m.get_unit_display(), unit_price=m.unit_price
+            name=name, quantity=quantity, unit=m.get_unit_display(), unit_price=price
         )
 
     def labor(self, line) -> Labor:
@@ -89,10 +120,14 @@ class Catalog:
 
     # --- Спецификации ---
 
-    def part_spec(self, part: Part, material_id: int | None = None) -> PartSpec:
+    def part_spec(
+        self, part: Part, material_id: int | None = None, *, any_color: bool = False
+    ) -> PartSpec:
         return PartSpec(
             name=part.name,
-            material=self.material_use(material_id or part.material_id, part.batch_material_qty),
+            material=self.material_use(
+                material_id or part.material_id, part.batch_material_qty, any_color=any_color
+            ),
             machine=self.machine(part.equipment_id),
             batch_minutes=part.batch_minutes,
             batch_size=part.batch_size,
@@ -103,9 +138,14 @@ class Catalog:
     def variant_spec(self, model: ProductModel, variant: Variant | None = None) -> VariantSpec:
         """Без варианта — модель с материалами деталей по умолчанию."""
         slot_materials = {s.slot: s.material_id for s in variant.slots.all()} if variant else {}
+        random = bool(variant and variant.coloring == Coloring.RANDOM)
         parts = tuple(
             (
-                self.part_spec(self.parts[line.part_id], slot_materials.get(line.slot)),
+                self.part_spec(
+                    self.parts[line.part_id],
+                    slot_materials.get(line.slot),
+                    any_color=random and bool(line.slot),
+                ),
                 line.quantity,
             )
             for line in model.model_parts.all()

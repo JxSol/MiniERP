@@ -25,17 +25,24 @@ def name_key(value: str) -> str:
 
 
 code_validator = RegexValidator(
-    regex=r"^[A-Z0-9]+(-[A-Z0-9]+)*$",
-    message="Только заглавная латиница, цифры и дефис между ними, например LUNA-WH.",
+    regex=r"^[A-Z0-9]+(-[A-Z0-9]+)*(_[0-9]+)?$",
+    message="Только заглавная латиница, цифры и дефис, например C-FDM-0000001.",
 )
+
+CODE_DIGITS = 7
 
 
 class CodeField(models.CharField):
-    """Код или артикул: латиница в верхнем регистре, цифры, дефис."""
+    """
+    Код записи. Генерируется системой по формуле (ТЗ п. 5.1), редактировать нельзя:
+    C-FDM-0000001 (деталь), M-0000001 (модель), M-0000001_01 (вариант), SKU-0000001 (товар).
+    """
 
     def __init__(self, *args, **kwargs):
         kwargs.setdefault("max_length", 40)
         kwargs.setdefault("validators", [code_validator])
+        kwargs.setdefault("editable", False)
+        kwargs.setdefault("blank", True)
         super().__init__(*args, **kwargs)
 
     def to_python(self, value):
@@ -46,6 +53,31 @@ class CodeField(models.CharField):
         value = self.to_python(getattr(model_instance, self.attname))
         setattr(model_instance, self.attname, value)
         return value
+
+
+class CodeCounter(models.Model):
+    """Счётчики для кодов: по одному на префикс (C-FDM, M, SKU…)."""
+
+    prefix = models.CharField(max_length=20, primary_key=True)
+    value = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        verbose_name = "Счётчик кодов"
+        verbose_name_plural = "Счётчики кодов"
+
+    def __str__(self):
+        return f"{self.prefix}: {self.value}"
+
+
+def next_code(prefix: str) -> str:
+    """Следующий код вида {prefix}-0000001. Безопасно при одновременных запросах."""
+    from django.db import transaction
+
+    with transaction.atomic():
+        counter, _ = CodeCounter.objects.select_for_update().get_or_create(prefix=prefix)
+        counter.value += 1
+        counter.save(update_fields=["value"])
+    return f"{prefix}-{counter.value:0{CODE_DIGITS}d}"
 
 
 def percent_field(verbose_name, **kwargs):
@@ -186,10 +218,7 @@ class Tag(UniqueNameModel):
 
 
 class Size(UniqueNameModel):
-    code = CodeField(
-        "Код", unique=True, max_length=10, help_text="Добавляется к коду модели: KONSTR-XL."
-    )
-    order = models.PositiveIntegerField("Порядок", default=0)
+    order = models.PositiveIntegerField("Порядок", default=0, help_text="Порядок в списках выбора.")
 
     class Meta:
         verbose_name = "Размер"

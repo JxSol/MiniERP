@@ -9,7 +9,7 @@ class Command(BaseCommand):
     help = "Загрузить примеры из ТЗ: светильник «Луна» и ёлочные шары с наборами."
 
     def handle(self, *args, **options):
-        if ProductModel.objects.filter(code__in=["LUNA", "BALL"]).exists():
+        if ProductModel.objects.filter(name__in=["Светильник Луна", "Ёлочный шар"]).exists():
             raise CommandError("Демо-данные уже загружены.")
         load_demo()
         recalculate_all()

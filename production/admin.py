@@ -19,7 +19,7 @@ from unfold.widgets import (
     UnfoldBooleanSwitchWidget,
 )
 
-from catalog.models import Color, Material, MaterialKind
+from catalog.models import Equipment, Material, MaterialKind
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
 from core.admin_utils import (
     CostVisibilityMixin,
@@ -30,6 +30,7 @@ from core.admin_utils import (
     fmt_number,
     hx_redirect,
     render_cost_tree,
+    safe_tree,
     thumbnail,
 )
 from core.forms import ActiveChoicesForm
@@ -76,6 +77,16 @@ class ProductCategoryAdmin(ArchiveAdmin):
 # --- Детали ------------------------------------------------------------------------
 
 
+class CopyPartForm(BaseDialogForm):
+    equipment = forms.ModelChoiceField(
+        label="Станок для копии",
+        queryset=Equipment.objects.filter(is_active=True),
+        widget=UnfoldAdminSelectWidget,
+        required=False,
+        help_text="Пусто — тот же станок, что у исходной детали.",
+    )
+
+
 class PartOperationInline(LineInline):
     model = PartOperation
     fields = ("operation_type", "minutes", "rate")
@@ -97,7 +108,7 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
     search_fields = ("name", "code")
     autocomplete_fields = ("equipment", "material")
     inlines = (PartOperationInline, PartPhotoInline)
-    readonly_fields = ("per_piece_display", "scrap_display", "cost_tree", "used_in")
+    readonly_fields = ("code", "per_piece_display", "scrap_display", "cost_tree", "used_in")
     cost_fields = ("cost_display", "cost_tree")
     actions_detail = ("copy_part",)
     fieldsets = (
@@ -150,7 +161,9 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
 
     @display(description="Разбивка")
     def cost_tree(self, obj):
-        return render_cost_tree(part_tree(obj)) if obj.pk else "Посчитается после сохранения"
+        if not obj.pk:
+            return "Посчитается после сохранения"
+        return render_cost_tree(safe_tree(part_tree, obj))
 
     @display(description="Входит в модели")
     def used_in(self, obj):
@@ -174,13 +187,15 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
         permissions=["copy"],
         dialog={
             "title": "Копировать деталь",
-            "description": "Создастся копия со всеми параметрами и операциями обработки.",
+            "description": "Создастся копия со всеми параметрами и операциями обработки. "
+            "Другой станок — другая технология и новый код.",
+            "form_class": CopyPartForm,
             "form_submit_text": "Копировать",
         },
     )
     def copy_part(self, request, form, object_id):
         part = get_object_or_404(Part, pk=object_id)
-        copy = generators.copy_part(part)
+        copy = generators.copy_part(part, form.cleaned_data.get("equipment"))
         messages.success(request, f"Создана копия «{copy.name}». Поменяйте название и параметры.")
         return hx_redirect(request, _admin_url(copy))
 
@@ -231,29 +246,24 @@ class ModelOperationInline(LineInline):
     verbose_name_plural = "Сборка"
 
 
-class ColorChoiceField(forms.ModelMultipleChoiceField):
+class MaterialChoiceField(forms.ModelMultipleChoiceField):
     """Галочки с образцами цвета (ТЗ п. 5.1)."""
 
-    def label_from_instance(self, color):
-        return format_html("{}{}", color_swatch(color.hex, color.name), color.name)
+    def label_from_instance(self, material):
+        swatch = color_swatch(material.color.hex, material.color.name) if material.color_id else ""
+        return format_html("{}{}", swatch, material.full_name)
 
 
-class ColorVariantsForm(BaseDialogForm):
-    material = forms.ModelChoiceField(
-        label="Материал",
+class MaterialVariantsForm(BaseDialogForm):
+    materials = MaterialChoiceField(
+        label="Материалы",
         queryset=Material.objects.none(),
-        widget=UnfoldAdminSelectWidget,
-        help_text="Только материалы той же категории, что у деталей со слотами.",
-    )
-    colors = ColorChoiceField(
-        label="Цвета",
-        queryset=Color.objects.filter(is_active=True),
         widget=UnfoldAdminCheckboxSelectMultipleWidget,
         required=False,
-        help_text="Отметьте цвета — для каждого создастся вариант. Нужны цвета, которые есть у материала.",
+        help_text="Для каждого отмеченного материала создастся вариант, названный по цвету.",
     )
     add_random = forms.BooleanField(
-        label="Добавить вариант «Ассорти» (случайный цвет)",
+        label="Добавить вариант «Ассорти» (случайный цвет той же линейки)",
         required=False,
         widget=UnfoldBooleanSwitchWidget,
     )
@@ -266,28 +276,18 @@ class ColorVariantsForm(BaseDialogForm):
 
     def __init__(self, request, object_id=None, *args, **kwargs):
         super().__init__(request, object_id, *args, **kwargs)
-        self.model_obj = ProductModel.objects.get(pk=object_id)
+        self.model_obj = get_object_or_404(ProductModel, pk=object_id)
         categories = generators.slot_category_ids(self.model_obj)
-        materials = Material.objects.filter(is_active=True, category_id__in=categories)
-        self.fields["material"].queryset = materials
-        self.fields["colors"].queryset = Color.objects.filter(
-            is_active=True, materials__in=materials
-        ).distinct()
+        self.fields["materials"].queryset = (
+            Material.objects.filter(is_active=True, category_id__in=categories)
+            .select_related("color")
+            .order_by("name", "color__order")
+        )
 
     def clean(self):
         data = super().clean()
-        material, colors = data.get("material"), data.get("colors") or []
-        if material:
-            available = set(material.material_colors.values_list("color_id", flat=True))
-            missing = [c.name for c in colors if c.pk not in available]
-            if missing:
-                self.add_error(
-                    "colors",
-                    f"У материала «{material}» нет цветов: {', '.join(missing)}. "
-                    "Добавьте их в карточке материала.",
-                )
-        if not colors and not data.get("add_random"):
-            self.add_error("colors", "Отметьте хотя бы один цвет или «Ассорти».")
+        if not data.get("materials"):
+            self.add_error("materials", "Отметьте хотя бы один материал.")
         return data
 
 
@@ -317,7 +317,7 @@ class SetForm(BaseDialogForm):
 
     def __init__(self, request, object_id=None, *args, **kwargs):
         super().__init__(request, object_id, *args, **kwargs)
-        self.model_obj = ProductModel.objects.get(pk=object_id)
+        self.model_obj = get_object_or_404(ProductModel, pk=object_id)
         self.fields["variants"].queryset = self.model_obj.variants.filter(is_active=True)
 
 
@@ -328,7 +328,7 @@ class SizeForm(BaseDialogForm):
 
     def __init__(self, request, object_id=None, *args, **kwargs):
         super().__init__(request, object_id, *args, **kwargs)
-        model = ProductModel.objects.get(pk=object_id)
+        model = get_object_or_404(ProductModel, pk=object_id)
         base = model.base_model or model
         self.fields["size"].queryset = Size.objects.filter(is_active=True).exclude(
             pk__in=base.sizes.values("size")
@@ -353,7 +353,13 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
     autocomplete_fields = ("category", "default_packaging", "base_model")
     filter_horizontal = ()
     inlines = (ModelPartInline, ModelComponentInline, ModelOperationInline, ModelPhotoInline)
-    readonly_fields = ("variants_overview", "products_overview", "sizes_overview", "cost_tree")
+    readonly_fields = (
+        "code",
+        "variants_overview",
+        "products_overview",
+        "sizes_overview",
+        "cost_tree",
+    )
     cost_fields = ("cost_display", "cost_tree")
     actions_detail = ("create_variants", "create_set", "create_size")
     fieldsets = (
@@ -386,7 +392,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
             super()
             .get_queryset(request)
             .select_related("category", "size")
-            .prefetch_related("variants__slots__color")
+            .prefetch_related("variants__slots__material__color")
             .annotate(variant_count=Count("variants"))
         )
 
@@ -404,7 +410,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
     def variants_display(self, obj):
         swatches = []
         for variant in obj.variants.all():
-            colors = [s.color for s in variant.slots.all() if s.color]
+            colors = [s.material.color for s in variant.slots.all() if s.material.color_id]
             if variant.coloring == Coloring.RANDOM:
                 swatches.append(format_html('<span title="{}">🎲</span>', variant.name))
             for color in colors[:1]:
@@ -421,14 +427,16 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
             return "Сохраните модель, затем создайте варианты кнопкой «Создать варианты» вверху."
         rows = []
         show_cost = can_view_cost()
-        for v in obj.variants.prefetch_related("slots__color", "slots__material"):
+        for v in obj.variants.prefetch_related("slots__material__color"):
             slots = format_html_join(
                 ", ",
                 "{}{}",
                 (
                     (
-                        color_swatch(s.color.hex, s.color.name) if s.color else "",
-                        f"{s.slot}: {s.color or s.material}",
+                        color_swatch(s.material.color.hex, s.material.color.name)
+                        if s.material.color_id
+                        else "",
+                        f"{s.slot}: {s.material}",
                     )
                     for s in v.slots.all()
                 ),
@@ -439,7 +447,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
                     "<td style='padding:4px 8px'>{}</td><td style='padding:4px 8px'>{}</td>"
                     "<td style='padding:4px 8px;text-align:right'>{}</td></tr>",
                     _link(v, v.name),
-                    v.code,
+                    v.full_code,
                     v.get_coloring_display(),
                     slots or "—",
                     fmt_money(v.cost_cached) if show_cost else "",
@@ -487,7 +495,9 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
 
     @display(description="Разбивка (материалы деталей по умолчанию)")
     def cost_tree(self, obj):
-        return render_cost_tree(model_tree(obj)) if obj.pk else "Посчитается после сохранения"
+        if not obj.pk:
+            return "Посчитается после сохранения"
+        return render_cost_tree(safe_tree(model_tree, obj))
 
     def save_related(self, request, form, formsets, change):
         """Переименование слота не должно стирать цвета вариантов (см. services)."""
@@ -530,19 +540,18 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
         url_path="create-variants",
         permissions=["generate"],
         dialog={
-            "title": "Варианты по цветам",
-            "description": "Для каждого цвета создастся одноцветный вариант модели.",
-            "form_class": ColorVariantsForm,
+            "title": "Варианты по материалам",
+            "description": "Для каждого материала создастся одноцветный вариант модели.",
+            "form_class": MaterialVariantsForm,
             "form_submit_text": "Создать",
         },
     )
     def create_variants(self, request, form, object_id):
         model = form.model_obj
         try:
-            variants, products, skipped = generators.create_color_variants(
+            variants, products, skipped = generators.create_material_variants(
                 model,
-                form.cleaned_data["material"],
-                list(form.cleaned_data["colors"]),
+                list(form.cleaned_data["materials"]),
                 add_random=form.cleaned_data["add_random"],
                 create_products=form.cleaned_data["create_products"],
             )
@@ -598,7 +607,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
         },
     )
     def create_size(self, request, form, object_id):
-        model = ProductModel.objects.get(pk=object_id)
+        model = get_object_or_404(ProductModel, pk=object_id)
         try:
             copy = generators.create_size(model, form.cleaned_data["size"])
         except ValidationError as error:
@@ -612,15 +621,11 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
 
 
 class VariantSlotForm(ActiveChoicesForm):
-    """
-    Материал — из категории детали слота; цвет — из палитр всех этих материалов,
-    чтобы материал и цвет можно было сменить за одно сохранение. Что цвет есть именно
-    у выбранного материала, проверяет VariantSlot.clean().
-    """
+    """Материал слота — только из категории детали по умолчанию."""
 
     class Meta:
         model = VariantSlot
-        fields = ("material", "color")
+        fields = ("material",)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -628,30 +633,27 @@ class VariantSlotForm(ActiveChoicesForm):
         if not slot.pk:
             return
         default = slot.variant.model.slot_default_materials().get(slot.slot)
-        materials = self.fields["material"].queryset
         if default:
-            materials = materials.filter(category_id=default.category_id)
-            self.fields["material"].queryset = materials
-        self.fields["color"].queryset = Color.objects.filter(
-            is_active=True, materials__in=materials
-        ).distinct()
-        self.fields["color"].help_text = "Цвет должен быть в палитре выбранного материала."
+            self.fields["material"].queryset = (
+                self.fields["material"].queryset.filter(category_id=default.category_id)
+            ).select_related("color")
 
 
 class VariantSlotInline(LineInline):
     model = VariantSlot
     form = VariantSlotForm
     can_delete = False
-    fields = ("slot", "material", "color", "swatch")
+    fields = ("slot", "material", "swatch")
     readonly_fields = ("slot", "swatch")
-    verbose_name_plural = "Цвета по слотам"
+    verbose_name_plural = "Материалы по слотам"
 
     def has_add_permission(self, request, obj=None):
         return False
 
     @display(description="")
     def swatch(self, obj):
-        return color_swatch(obj.color.hex, obj.color.name) if obj.color_id else ""
+        color = obj.material.color if obj.material_id else None
+        return color_swatch(color.hex, color.name) if color else ""
 
 
 @admin.register(Variant)
@@ -671,7 +673,7 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
     search_fields = ("name", "code", "model__name", "model__code")
     autocomplete_fields = ("model",)
     inlines = (VariantSlotInline, VariantPhotoInline)
-    readonly_fields = ("sku_display", "cost_tree")
+    readonly_fields = ("full_code", "product_display", "cost_tree")
     cost_fields = ("cost_display", "cost_tree")
     fieldsets = (
         (
@@ -681,8 +683,8 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
                 "fields": (
                     "model",
                     "name",
-                    "code",
-                    "sku_display",
+                    "full_code",
+                    "product_display",
                     "coloring",
                     "card_warning",
                     "is_active",
@@ -695,7 +697,10 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
 
     def get_queryset(self, request):
         return (
-            super().get_queryset(request).select_related("model").prefetch_related("slots__color")
+            super()
+            .get_queryset(request)
+            .select_related("model")
+            .prefetch_related("slots__material__color")
         )
 
     def get_readonly_fields(self, request, obj=None):
@@ -723,12 +728,25 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
     def swatches(self, obj):
         if obj.coloring == Coloring.RANDOM:
             return "🎲"
-        items = [color_swatch(s.color.hex, s.color.name) for s in obj.slots.all() if s.color]
+        items = [
+            color_swatch(s.material.color.hex, s.material.color.name)
+            for s in obj.slots.all()
+            if s.material.color_id
+        ]
         return format_html("".join(["{}"] * len(items)), *items) if items else "—"
 
-    @display(description="Артикул поштучного товара")
-    def sku_display(self, obj):
-        return generators.single_product_sku(obj) if obj.pk else "—"
+    @display(description="Поштучный товар")
+    def product_display(self, obj):
+        if not obj.pk:
+            return "—"
+        product = generators.single_product_of(obj)
+        if product is None:
+            return "ещё не создан"
+        return _link(product, f"{product.sku} — {product.name}")
+
+    @display(description="Код")
+    def full_code(self, obj):
+        return obj.full_code if obj.pk else "присвоится при сохранении"
 
     @display(description="Себестоимость", ordering="cost_cached")
     def cost_display(self, obj):
@@ -736,4 +754,6 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
 
     @display(description="Разбивка")
     def cost_tree(self, obj):
-        return render_cost_tree(variant_tree(obj)) if obj.pk else "Посчитается после сохранения"
+        if not obj.pk:
+            return "Посчитается после сохранения"
+        return render_cost_tree(safe_tree(variant_tree, obj))

@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib import admin
-from django.db.models import DecimalField, ExpressionWrapper, F
+from django.db.models import Avg, DecimalField, ExpressionWrapper, F, Q
 from django.utils.html import format_html, format_html_join, mark_safe
 from unfold.decorators import display
 from unfold.widgets import UnfoldAdminColorInputWidget
@@ -11,11 +11,13 @@ from core.admin_utils import color_swatch, fmt_money, fmt_number, fmt_price
 from .models import (
     Color,
     Equipment,
+    Manufacturer,
     Material,
     MaterialCategory,
-    MaterialColor,
+    MaterialOffer,
     MaterialPriceHistory,
     OperationType,
+    Supplier,
 )
 
 # --- Категории материалов ----------------------------------------------------------
@@ -50,50 +52,79 @@ class MaterialCategoryAdmin(ArchiveAdmin):
     ordering = ("path",)
 
 
-# --- Палитра цветов ----------------------------------------------------------------
+# --- Палитра, производители, поставщики ---------------------------------------------
 
 
 class ColorForm(forms.ModelForm):
     class Meta:
         model = Color
-        fields = ("name", "code", "hex", "order", "is_active", "notes")
+        fields = ("name", "hex", "order", "is_active", "notes")
         widgets = {"hex": UnfoldAdminColorInputWidget}
 
 
 @admin.register(Color)
 class ColorAdmin(ArchiveAdmin):
     form = ColorForm
-    list_display = ("swatch", "name", "code", "hex", "order", "is_active")
+    list_display = ("swatch", "name", "hex", "order", "is_active")
     list_display_links = ("swatch", "name")
     list_editable = ("order",)
-    search_fields = ("name", "code")
+    search_fields = ("name",)
 
     @display(description="")
     def swatch(self, obj):
         return color_swatch(obj.hex, obj.name)
 
 
+@admin.register(Manufacturer)
+class ManufacturerAdmin(ArchiveAdmin):
+    list_display = ("name", "url", "is_active")
+    search_fields = ("name",)
+    fields = ("name", "url", "is_active", "notes")
+
+
+@admin.register(Supplier)
+class SupplierAdmin(ArchiveAdmin):
+    list_display = ("name", "url", "is_active")
+    search_fields = ("name",)
+    fields = ("name", "url", "is_active", "notes")
+
+
 # --- Материалы ---------------------------------------------------------------------
 
 
-class MaterialColorInline(LineInline):
-    model = MaterialColor
-    autocomplete_fields = ("color",)
-    fields = ("color", "vendor_code", "available")
-    verbose_name_plural = "Цвета материала (из палитры)"
+class MaterialOfferInline(LineInline):
+    model = MaterialOffer
+    autocomplete_fields = ("manufacturer", "supplier")
+    fields = (
+        "is_active",
+        "manufacturer",
+        "supplier",
+        "pack_size",
+        "pack_price",
+        "unit_price_display",
+        "url",
+    )
+    readonly_fields = ("unit_price_display",)
+    verbose_name_plural = "Предложения поставщиков"
+
+    @display(description="За единицу")
+    def unit_price_display(self, obj):
+        if not obj.pk:
+            return "—"
+        return fmt_price(obj.unit_price)
 
 
 class PriceHistoryInline(LineInline):
     model = MaterialPriceHistory
     can_delete = False
-    fields = ("changed_at", "pack_size", "pack_price", "unit_price_display", "changed_by")
+    fields = ("changed_at", "offer", "pack_size", "pack_price", "unit_price_display", "changed_by")
     readonly_fields = fields
     verbose_name_plural = "История цен"
 
     def has_add_permission(self, request, obj=None):
         return False
 
-    @display(description="Цена за единицу")
+    @display(description="За единицу")
     def unit_price_display(self, obj):
         return fmt_price(obj.unit_price)
 
@@ -101,17 +132,18 @@ class PriceHistoryInline(LineInline):
 @admin.register(Material)
 class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
     list_display = (
-        "name",
+        "swatch",
+        "full_name_display",
         "category",
         "unit_price_display",
-        "pack_display",
-        "colors_display",
+        "offers_display",
         "is_active",
     )
-    list_filter = ("category__kind", "category")
-    search_fields = ("name", "supplier")
-    autocomplete_fields = ("category",)
-    inlines = (MaterialColorInline, PriceHistoryInline)
+    list_display_links = ("swatch", "full_name_display")
+    list_filter = ("category__kind", "category", "color")
+    search_fields = ("name", "color__name", "offers__manufacturer__name", "offers__supplier__name")
+    autocomplete_fields = ("category", "color")
+    inlines = (MaterialOfferInline, PriceHistoryInline)
     readonly_fields = ("unit_price_display", "where_used")
     fieldsets = (
         (
@@ -120,12 +152,10 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
                 "classes": ["tab"],
                 "fields": (
                     "name",
+                    "color",
                     "category",
                     "unit",
-                    ("pack_size", "pack_price"),
                     "unit_price_display",
-                    "supplier",
-                    "url",
                     "is_active",
                     "notes",
                 ),
@@ -138,35 +168,66 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
         return (
             super()
             .get_queryset(request)
-            .select_related("category")
-            .prefetch_related("colors")
+            .select_related("category", "color")
+            .prefetch_related("offers__manufacturer", "offers__supplier")
             .annotate(
-                unit_price_db=ExpressionWrapper(
-                    F("pack_price") / F("pack_size"), output_field=DecimalField()
+                unit_price_db=Avg(
+                    ExpressionWrapper(
+                        F("offers__pack_price") / F("offers__pack_size"),
+                        output_field=DecimalField(),
+                    ),
+                    filter=Q(offers__is_active=True),
                 )
             )
         )
 
-    def save_model(self, request, obj, form, change):
-        obj._changed_by = request.user
-        super().save_model(request, obj, form, change)
+    def save_formset(self, request, form, formset, change):
+        if formset.model is MaterialOffer:
+            for offer in formset.save(commit=False):
+                offer._changed_by = request.user
+                offer.save()
+            for offer in formset.deleted_objects:
+                offer.delete()
+            formset.save_m2m()
+            return
+        super().save_formset(request, form, formset, change)
 
-    @display(description="Цена за единицу", ordering="unit_price_db")
+    @display(description="")
+    def swatch(self, obj):
+        return color_swatch(obj.color.hex, obj.color.name) if obj.color_id else ""
+
+    @display(description="Материал", ordering="name")
+    def full_name_display(self, obj):
+        return obj.full_name
+
+    @display(description="Цена за единицу (средняя)", ordering="unit_price_db")
     def unit_price_display(self, obj):
-        if not obj.pk and obj.pack_price is None:
-            return "—"
-        return f"{fmt_price(obj.unit_price)} / {obj.get_unit_display()}"
+        if not obj.pk:
+            return "Посчитается из предложений поставщиков после сохранения"
+        price = obj.unit_price
+        if price is None:
+            return format_html(
+                "<span style='color:#b45309'>нет актуальных предложений — "
+                "себестоимость не считается</span>"
+            )
+        return f"{fmt_price(price)} / {obj.get_unit_display()}"
 
-    @display(description="Закупка")
-    def pack_display(self, obj):
-        return (
-            f"{fmt_number(obj.pack_size)} {obj.get_unit_display()} за {fmt_money(obj.pack_price)}"
-        )
-
-    @display(description="Цвета")
-    def colors_display(self, obj):
+    @display(description="Предложения")
+    def offers_display(self, obj):
+        offers = obj.active_offers
+        if not offers:
+            return format_html("<span style='color:#b45309'>нет</span>")
         return format_html_join(
-            "", "{}", ((color_swatch(c.hex, c.name),) for c in obj.colors.all())
+            mark_safe("<br>"),
+            "{}: {}",
+            (
+                (
+                    " · ".join(str(x) for x in (o.manufacturer, o.supplier) if x) or "—",
+                    f"{fmt_number(o.pack_size)} {obj.get_unit_display()} "
+                    f"за {fmt_money(o.pack_price, 0)}",
+                )
+                for o in offers
+            ),
         )
 
     @display(description="Где используется")
@@ -176,7 +237,7 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
         groups = [
             ("Детали (материал по умолчанию)", [str(p) for p in obj.parts.all()]),
             (
-                "Варианты (цвет в слоте)",
+                "Варианты (в слоте)",
                 sorted(
                     {str(s.variant) for s in obj.variant_slots.select_related("variant__model")}
                 ),

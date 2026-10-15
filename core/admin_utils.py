@@ -163,6 +163,10 @@ def render_cost_tree(node, *, footer: list[tuple[str, Decimal]] | None = None) -
     """Таблица-дерево: каждая строка с отступом по уровню вложенности."""
     if node is None:
         return "—"
+    if isinstance(node, Exception):
+        return format_html(
+            "<span style='color:#b45309'>Себестоимость не считается: {}</span>", node
+        )
     footer_html = format_html_join(
         "",
         '<tr><td colspan="4" style="padding:8px;font-weight:600;text-align:right">{}</td>'
@@ -186,6 +190,16 @@ def render_cost_tree(node, *, footer: list[tuple[str, Decimal]] | None = None) -
         mark_safe("".join(_rows(node, 0))),
         footer_html,
     )
+
+
+def safe_tree(build, obj):
+    """Дерево себестоимости или понятная ошибка вместо страницы 500."""
+    from costing.loader import CostError
+
+    try:
+        return build(obj)
+    except CostError as error:
+        return error
 
 
 class CostVisibilityMixin:

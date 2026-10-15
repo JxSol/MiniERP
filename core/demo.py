@@ -10,10 +10,12 @@ from django.db import transaction
 from catalog.models import (
     Color,
     Equipment,
+    Manufacturer,
     Material,
     MaterialCategory,
-    MaterialColor,
+    MaterialOffer,
     OperationType,
+    Supplier,
     Technology,
     Unit,
 )
@@ -38,17 +40,30 @@ def _op(name: str) -> OperationType:
     return OperationType.objects.get(name=name)
 
 
-def _material(name, category, unit, pack_size, pack_price, colors=()):
+def _material(name, category, unit, pack_size, pack_price, *, color=None, maker=None, shop=None):
+    """Материал с одним актуальным предложением поставщика."""
     material = Material.objects.create(
         name=name,
         category=_category(category),
         unit=unit,
+        color=Color.objects.get(name=color) if color else None,
+    )
+    MaterialOffer.objects.create(
+        material=material,
+        manufacturer=Manufacturer.objects.filter(name=maker).first() if maker else None,
+        supplier=Supplier.objects.filter(name=shop).first() if shop else None,
         pack_size=D(pack_size),
         pack_price=D(pack_price),
     )
-    for code in colors:
-        MaterialColor.objects.create(material=material, color=Color.objects.get(code=code))
     return material
+
+
+def variant_of(model: ProductModel, name: str):
+    return model.variants.get(name=name)
+
+
+def product_of(model: ProductModel, variant_name: str):
+    return generators.single_product_of(variant_of(model, variant_name))
 
 
 @transaction.atomic
@@ -60,14 +75,25 @@ def load_demo() -> dict:
     settings.overhead_percent = D(10)
     settings.save()
 
-    pla = _material("PLA Basic", "PLA", Unit.GRAM, 1000, 9000, ["WH", "BK", "RD", "GN", "VT"])
-    silk = _material("Silk PLA", "PLA", Unit.GRAM, 1000, 12000, ["GD", "SV"])
-    plywood = _material("Фанера 4 мм", "Фанера", Unit.SHEET, 1, 2400)
-    cord = _material("Шнур с выключателем", "Электрика", Unit.PIECE, 10, 15000)
-    socket = _material("Патрон E27", "Электрика", Unit.PIECE, 1, 400)
-    screw = _material("Винт M3", "Крепёж", Unit.PIECE, 100, 1500)
+    def pla(color):
+        return _material(
+            "PLA Basic", "PLA", Unit.GRAM, 1000, 9000, color=color, maker="Bambu Lab", shop="Kaspi"
+        )
+
+    pla_white = pla("Белый")
+    pla_black = pla("Чёрный")
+    pla_red = pla("Красный")
+    pla_green = pla("Зелёный")
+    pla_violet = pla("Фиолетовый")
+    silk_gold = _material(
+        "PLA Silk", "PLA", Unit.GRAM, 1000, 12000, color="Золотой", maker="Bambu Lab", shop="Kaspi"
+    )
+    plywood = _material("Фанера 4 мм", "Фанера", Unit.SHEET, 1, 2400, shop="Местный магазин")
+    cord = _material("Шнур с выключателем", "Электрика", Unit.PIECE, 10, 15000, shop="AliExpress")
+    socket = _material("Патрон E27", "Электрика", Unit.PIECE, 1, 400, shop="Местный магазин")
+    screw = _material("Винт M3", "Крепёж", Unit.PIECE, 100, 1500, shop="AliExpress")
     box = _material("Коробка 20×20×25", "Фирменная", Unit.PIECE, 1, 300)
-    _material("Коробочка 8×8×8", "Фирменная", Unit.PIECE, 1, 120)
+    small_box = _material("Коробочка 8×8×8", "Фирменная", Unit.PIECE, 1, 120)
     big_box = _material("Коробка 40×30×30", "Фирменная", Unit.PIECE, 1, 900)
 
     printer = Equipment.objects.create(
@@ -92,9 +118,8 @@ def load_demo() -> dict:
 
     shade = Part.objects.create(
         name="Плафон Луна",
-        code="LUNA-SHADE",
         equipment=printer,
-        material=pla,
+        material=pla_white,
         batch_material_qty=D(250),
         batch_minutes=D(480),
         batch_size=1,
@@ -102,7 +127,6 @@ def load_demo() -> dict:
     PartOperation.objects.create(part=shade, operation_type=_op("Снятие поддержек"), minutes=D(5))
     base = Part.objects.create(
         name="Подставка Луна",
-        code="LUNA-BASE",
         equipment=laser,
         material=plywood,
         batch_material_qty=D(1),
@@ -112,9 +136,8 @@ def load_demo() -> dict:
     PartOperation.objects.create(part=base, operation_type=_op("Шлифовка"), minutes=D(2))
     fixator = Part.objects.create(
         name="Фиксатор плафона",
-        code="LUNA-FIX",
         equipment=printer,
-        material=pla,
+        material=pla_white,
         batch_material_qty=D(50),
         batch_minutes=D(120),
         batch_size=10,
@@ -123,7 +146,6 @@ def load_demo() -> dict:
     lamps = ProductCategory.objects.create(name="Светильники")
     luna = ProductModel.objects.create(
         name="Светильник Луна",
-        code="LUNA",
         category=lamps,
         default_packaging=box,
         default_packing_minutes=D(5),
@@ -137,15 +159,13 @@ def load_demo() -> dict:
     ModelComponent.objects.create(model=luna, material=screw, quantity=D(4))
     ModelOperation.objects.create(model=luna, operation_type=_op("Сборка"), minutes=D(15))
 
-    generators.create_color_variants(luna, pla, list(Color.objects.filter(code__in=["WH", "BK"])))
-    generators.create_color_variants(luna, silk, list(Color.objects.filter(code="GD")))
+    generators.create_material_variants(luna, [pla_white, pla_black, silk_gold])
 
     # Ёлочный шар: поштучно и наборами
     ball_part = Part.objects.create(
         name="Корпус шара 6 см",
-        code="BALL-BODY",
         equipment=printer,
-        material=pla,
+        material=pla_red,
         batch_material_qty=D(120),
         batch_minutes=D(240),
         batch_size=8,
@@ -153,24 +173,20 @@ def load_demo() -> dict:
     newyear = ProductCategory.objects.create(name="Новый год")
     ball = ProductModel.objects.create(
         name="Ёлочный шар",
-        code="BALL",
         category=newyear,
-        default_packaging=Material.objects.get(name="Коробочка 8×8×8"),
+        default_packaging=small_box,
         default_packing_minutes=D(1),
     )
     ModelPart.objects.create(model=ball, part=ball_part, quantity=1, slot="Корпус")
-    generators.create_color_variants(
-        ball, pla, list(Color.objects.filter(code__in=["RD", "GN", "VT"])), add_random=True
+    generators.create_material_variants(
+        ball, [pla_red, pla_green, pla_violet, silk_gold], add_random=True
     )
-    generators.create_color_variants(ball, silk, list(Color.objects.filter(code="GD")))
-    variants = {v.code: v for v in ball.variants.all()}
-    generators.create_set(ball, [variants["RD"]], 100, packaging=big_box, packing_minutes=D(20))
-    generators.create_set(ball, [variants["MIX"]], 100, packaging=big_box, packing_minutes=D(20))
+    red, green, violet, gold, mix = (
+        variant_of(ball, n) for n in ("Красный", "Зелёный", "Фиолетовый", "Золотой", "Ассорти")
+    )
+    generators.create_set(ball, [red], 100, packaging=big_box, packing_minutes=D(20))
+    generators.create_set(ball, [mix], 100, packaging=big_box, packing_minutes=D(20))
     generators.create_set(
-        ball,
-        [variants["RD"], variants["GN"], variants["VT"], variants["GD"]],
-        100,
-        packaging=big_box,
-        packing_minutes=D(20),
+        ball, [red, green, violet, gold], 100, packaging=big_box, packing_minutes=D(20)
     )
     return {"luna": luna, "ball": ball}

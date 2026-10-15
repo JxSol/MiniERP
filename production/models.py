@@ -12,7 +12,6 @@ from simple_history.models import HistoricalRecords
 from catalog.models import (
     COMPONENT_KINDS,
     PRODUCTION_KINDS,
-    Color,
     Equipment,
     Material,
     MaterialKind,
@@ -28,6 +27,7 @@ from core.models import (
     clean_name,
     money_field,
     name_key,
+    next_code,
     percent_field,
     positive_decimal_field,
 )
@@ -112,6 +112,8 @@ class Part(UniqueNameModel):
         verbose_name="Станок",
         on_delete=models.PROTECT,
         related_name="parts",
+        help_text="На чём изготавливается. Технология станка попадает в код детали (C-FDM-…); "
+        "поменять технологию у готовой детали нельзя — это уже другая деталь.",
     )
     material = models.ForeignKey(
         Material,
@@ -153,6 +155,15 @@ class Part(UniqueNameModel):
 
     def clean(self):
         super().clean()
+        if self.pk and self.code and self.equipment_id:
+            old_tech = self.code.split("-")[1]
+            if old_tech != self.equipment.technology_code:
+                raise ValidationError(
+                    {
+                        "equipment": "Смена технологии — это новая деталь. "
+                        "Нажмите «Копировать деталь» и выберите другой станок."
+                    }
+                )
         if self.equipment_id and self.material_id:
             if self.material.kind not in self.equipment.allowed_material_kinds:
                 raise ValidationError(
@@ -161,6 +172,11 @@ class Part(UniqueNameModel):
                         f"«{self.equipment}» ({self.equipment.get_technology_display()})."
                     }
                 )
+
+    def save(self, *args, **kwargs):
+        if not self.code:
+            self.code = next_code(f"C-{self.equipment.technology_code}")
+        super().save(*args, **kwargs)
 
     @property
     def material_per_piece(self) -> Decimal:
@@ -202,7 +218,7 @@ class ModelStatus(models.TextChoices):
 class ProductModel(UniqueNameModel):
     """Изделие целиком: детали, покупные комплектующие, сборка (ТЗ п. 6.6)."""
 
-    code = CodeField("Код", unique=True, max_length=30)
+    code = CodeField("Код", unique=True)
     category = models.ForeignKey(
         ProductCategory,
         verbose_name="Категория",
@@ -299,6 +315,11 @@ class ProductModel(UniqueNameModel):
                 raise ValidationError(
                     {"base_model": "У этой модели уже есть размеры — она сама базовая."}
                 )
+
+    def save(self, *args, **kwargs):
+        if not self.code:
+            self.code = next_code("M")
+        super().save(*args, **kwargs)
 
     def slot_names(self) -> list[str]:
         """Цветовые слоты модели в порядке появления в составе."""
@@ -399,7 +420,7 @@ class Variant(ArchivableModel):
     )
     name = models.CharField("Название", max_length=100)
     name_key = models.CharField(max_length=100, editable=False)
-    code = CodeField("Код", max_length=15, help_text="Добавляется к коду модели: LUNA-WH.")
+    code = CodeField("Номер", max_length=15)
     coloring = models.CharField(
         "Тип расцветки", max_length=10, choices=Coloring.choices, default=Coloring.FIXED
     )
@@ -431,8 +452,9 @@ class Variant(ArchivableModel):
         return f"{self.model.name} — {self.name}"
 
     @property
-    def sku(self) -> str:
-        return f"{self.model.code}-{self.code}"
+    def full_code(self) -> str:
+        """M-0000001_02"""
+        return f"{self.model.code}_{self.code}"
 
     def clean(self):
         super().clean()
@@ -447,17 +469,20 @@ class Variant(ArchivableModel):
     def save(self, *args, **kwargs):
         self.name = clean_name(self.name)
         self.name_key = name_key(self.name)
+        if not self.code:
+            numbers = [
+                int(c)
+                for c in Variant.objects.filter(model_id=self.model_id).values_list(
+                    "code", flat=True
+                )
+                if c.isdigit()
+            ]
+            self.code = f"{max(numbers, default=0) + 1:02d}"
         super().save(*args, **kwargs)
-
-    def missing_colors(self) -> list[str]:
-        """Слоты задуманной расцветки, у которых не выбран цвет."""
-        if self.coloring != Coloring.FIXED:
-            return []
-        return [s.slot for s in self.slots.all() if s.color_id is None]
 
 
 class VariantSlot(models.Model):
-    """Какой материал и цвет идёт в слот модели. Строки создаются автоматически."""
+    """Какой материал идёт в слот модели. Строки создаются автоматически."""
 
     variant = models.ForeignKey(Variant, on_delete=models.CASCADE, related_name="slots")
     slot = models.CharField("Слот", max_length=50)
@@ -467,13 +492,8 @@ class VariantSlot(models.Model):
         on_delete=models.PROTECT,
         related_name="variant_slots",
         limit_choices_to={"category__kind__in": PRODUCTION_KINDS},
-    )
-    color = models.ForeignKey(
-        Color,
-        verbose_name="Цвет",
-        null=True,
-        blank=True,
-        on_delete=models.PROTECT,
+        help_text="Материал с цветом, например «PLA Basic, зелёный». У «Ассорти» цвет не важен: "
+        "берётся среднее по всем цветам этой линейки.",
     )
 
     class Meta:
@@ -485,7 +505,7 @@ class VariantSlot(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.slot}: {self.material} {self.color or ''}".strip()
+        return f"{self.slot}: {self.material}"
 
     def clean(self):
         super().clean()
@@ -499,13 +519,10 @@ class VariantSlot(models.Model):
                     f"«{default.category}»."
                 }
             )
-        if self.variant.coloring == Coloring.RANDOM:
-            if self.color_id:
-                raise ValidationError({"color": "У случайной расцветки цвет не указывается."})
-            return
-        if not self.color_id:
-            raise ValidationError({"color": "Для задуманной расцветки нужно выбрать цвет."})
-        if not self.material.material_colors.filter(color_id=self.color_id).exists():
+        if default and self.material.unit != default.unit:
             raise ValidationError(
-                {"color": f"У материала «{self.material}» нет цвета «{self.color}»."}
+                {
+                    "material": f"Расход детали задан в «{default.get_unit_display()}», "
+                    f"а у «{self.material}» единица — «{self.material.get_unit_display()}»."
+                }
             )

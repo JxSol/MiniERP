@@ -22,6 +22,8 @@ CHANGELISTS = [
     "production_part",
     "catalog_material",
     "catalog_color",
+    "catalog_manufacturer",
+    "catalog_supplier",
     "catalog_equipment",
     "catalog_operationtype",
     "catalog_materialcategory",
@@ -48,10 +50,10 @@ def test_admin_pages_open(client, admin_user, demo):
     for name in CHANGELISTS:
         assert client.get(reverse(f"admin:{name}_changelist")).status_code == 200, name
     for obj in [
-        Product.objects.get(sku="LUNA-WH"),
-        ProductModel.objects.get(code="LUNA"),
-        Variant.objects.get(model__code="LUNA", code="WH"),
-        Part.objects.get(code="LUNA-SHADE"),
+        Product.objects.get(name="Светильник Луна — Белый"),
+        ProductModel.objects.get(name="Светильник Луна"),
+        Variant.objects.get(model__name="Светильник Луна", name="Белый"),
+        Part.objects.get(name="Плафон Луна"),
     ]:
         url = reverse(f"admin:{obj._meta.app_label}_{obj._meta.model_name}_change", args=[obj.pk])
         assert client.get(url).status_code == 200, url
@@ -61,11 +63,11 @@ def test_admin_pages_open(client, admin_user, demo):
 
 def test_seller_does_not_see_cost(client, demo):
     client.force_login(user_in(SELLER, "seller"))
-    product = Product.objects.get(sku="LUNA-WH")
+    product = Product.objects.get(name="Светильник Луна — Белый")
     listing = client.get(reverse("admin:sales_product_changelist")).content.decode()
     page = client.get(reverse("admin:sales_product_change", args=[product.pk])).content.decode()
     for html in (listing, page):
-        assert "LUNA-WH" in html
+        assert product.sku in html
         assert "7 988" not in html
         assert "Себестоимость" not in html
     assert client.get(reverse("admin:catalog_material_changelist")).status_code == 403
@@ -74,7 +76,7 @@ def test_seller_does_not_see_cost(client, demo):
 
 def test_technologist_sees_cost_but_not_palette_editing(client, demo):
     client.force_login(user_in(TECHNOLOGIST, "tech"))
-    product = Product.objects.get(sku="LUNA-WH")
+    product = Product.objects.get(name="Светильник Луна — Белый")
     page = client.get(reverse("admin:sales_product_change", args=[product.pk])).content.decode()
     assert "7 988,66" in page
     assert client.get(reverse("admin:catalog_color_add")).status_code == 403

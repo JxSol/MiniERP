@@ -1,6 +1,6 @@
 """
-Генераторы (ТЗ п. 5.1): варианты по цветам, наборы, размерные модели,
-поштучные товары, копирование детали. Вводить минимум — остальное создаётся само.
+Генераторы (ТЗ п. 5.1): варианты по материалам, наборы, размерные модели,
+поштучные товары, копирование детали. Коды и артикулы всегда создаются системой.
 """
 
 from decimal import Decimal
@@ -8,7 +8,7 @@ from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.db import transaction
 
-from catalog.models import Color, Material, OperationType
+from catalog.models import Equipment, Material, OperationType
 from core.models import Size, name_key
 from sales.models import Product, ProductItem, ProductKind, ProductOperation, ProductPackaging
 
@@ -23,7 +23,6 @@ from .models import (
     Variant,
 )
 
-RANDOM_CODE = "MIX"
 RANDOM_NAME = "Ассорти"
 
 
@@ -38,22 +37,20 @@ def slot_category_ids(model: ProductModel) -> set[int]:
 # --- Поштучный товар ---------------------------------------------------------------
 
 
-def single_product_sku(variant: Variant) -> str:
-    return f"{variant.model.code}-{variant.code}"
+def single_product_name(variant: Variant) -> str:
+    return f"{variant.model.name} — {variant.name}"
 
 
 @transaction.atomic
 def create_single_product(variant: Variant) -> Product | None:
     """Поштучный товар «вариант × 1» с упаковкой модели. None — если такой уже есть."""
     model = variant.model
-    sku = single_product_sku(variant)
-    name = f"{model.name} — {variant.name}"
-    if (
-        Product.objects.filter(sku=sku).exists()
-        or Product.objects.filter(name_key=name_key(name)).exists()
-    ):
+    name = single_product_name(variant)
+    if Product.objects.filter(name_key=name_key(name)).exists():
         return None
-    product = Product.objects.create(sku=sku, name=name, kind=ProductKind.SINGLE)
+    if ProductItem.objects.filter(variant=variant, product__kind=ProductKind.SINGLE).exists():
+        return None
+    product = Product.objects.create(name=name, kind=ProductKind.SINGLE)
     ProductItem.objects.create(product=product, variant=variant, quantity=1)
     if model.default_packaging_id:
         ProductPackaging.objects.create(
@@ -66,48 +63,62 @@ def create_single_product(variant: Variant) -> Product | None:
     return product
 
 
-# --- Варианты по цветам ------------------------------------------------------------
+def single_product_of(variant: Variant) -> Product | None:
+    item = (
+        ProductItem.objects.filter(variant=variant, product__kind=ProductKind.SINGLE)
+        .select_related("product")
+        .first()
+    )
+    return item.product if item else None
+
+
+# --- Варианты по материалам --------------------------------------------------------
 
 
 @transaction.atomic
-def create_color_variants(
+def create_material_variants(
     model: ProductModel,
-    material: Material,
-    colors: list[Color],
+    materials: list[Material],
     *,
     add_random: bool = False,
     create_products: bool = True,
 ) -> tuple[list[Variant], list[Product], list[str]]:
     """
-    Одноцветные варианты: во все слоты модели — выбранный материал и цвет.
-    Варианты с уже существующим кодом пропускаются.
+    Одноцветные варианты: во все слоты модели — выбранный материал («PLA Basic, зелёный»).
+    Название варианта — цвет материала. Уже существующие названия пропускаются.
     """
     categories = slot_category_ids(model)
     if not categories:
         raise ValidationError("У модели нет цветовых слотов — укажите слот хотя бы у одной детали.")
-    if categories != {material.category_id}:
+    if len(categories) > 1:
         raise ValidationError(
             "Генератор работает, когда все слоты модели из одной категории материалов. "
             "Многоцветные варианты создайте вручную."
         )
+    wrong = [m for m in materials if m.category_id not in categories]
+    if wrong:
+        raise ValidationError("Не подходят по категории: " + ", ".join(str(m) for m in wrong) + ".")
 
-    existing_codes = set(model.variants.values_list("code", flat=True))
     existing_names = set(model.variants.values_list("name_key", flat=True))
     variants: list[Variant] = []
     skipped: list[str] = []
 
-    def make(name: str, code: str, coloring: str, color: Color | None):
-        if code in existing_codes or name_key(name) in existing_names:
+    def make(name: str, coloring: str, material: Material):
+        if name_key(name) in existing_names:
             skipped.append(name)
             return
-        variant = Variant.objects.create(model=model, name=name, code=code, coloring=coloring)
-        variant.slots.update(material=material, color=color)
+        variant = Variant.objects.create(model=model, name=name, coloring=coloring)
+        variant.slots.update(material=material)
         variants.append(variant)
+        existing_names.add(name_key(name))
 
-    for color in colors:
-        make(color.name, color.code, Coloring.FIXED, color)
+    for material in materials:
+        name = material.color.name if material.color_id else material.name
+        make(name, Coloring.FIXED, material)
     if add_random:
-        make(RANDOM_NAME, RANDOM_CODE, Coloring.RANDOM, None)
+        if not materials:
+            raise ValidationError("Для «Ассорти» отметьте хотя бы один материал линейки.")
+        make(RANDOM_NAME, Coloring.RANDOM, materials[0])
 
     products = []
     if create_products:
@@ -146,17 +157,13 @@ def create_set(
         )
 
     if count == 1:
-        variant = variants[0]
-        sku = f"{model.code}-{variant.code}-{total}"
-        name = f"{model.name} — {variant.name}, {total} шт"
+        name = f"{model.name} — {variants[0].name}, {total} шт"
     else:
-        sku = f"{model.code}-MIX{count}-{total}"
-        name = f"{model.name} — микс {count} цв., {total} шт"
+        name = f"{model.name} — микс ровный ({count} цв.), {total} шт"
+    if Product.objects.filter(name_key=name_key(name)).exists():
+        raise ValidationError(f"Товар «{name}» уже есть.")
 
-    if Product.objects.filter(sku=sku).exists():
-        raise ValidationError(f"Товар с артикулом {sku} уже есть.")
-
-    product = Product.objects.create(sku=sku, name=name, kind=ProductKind.SET)
+    product = Product.objects.create(name=name, kind=ProductKind.SET)
     for variant in variants:
         ProductItem.objects.create(product=product, variant=variant, quantity=total // count)
     if packaging:
@@ -180,7 +187,6 @@ def create_size(model: ProductModel, size: Size) -> ProductModel:
 
     copy = ProductModel.objects.create(
         name=f"{base.name} {size.name}",
-        code=f"{base.code}-{size.code}",
         category=base.category,
         description=base.description,
         default_packaging=base.default_packaging,
@@ -198,18 +204,15 @@ def create_size(model: ProductModel, size: Size) -> ProductModel:
         ModelOperation.objects.create(
             model=copy, operation_type=line.operation_type, minutes=line.minutes, rate=line.rate
         )
-    for variant in base.variants.filter(is_active=True):
+    for variant in base.variants.filter(is_active=True).order_by("code"):
         new_variant = Variant.objects.create(
             model=copy,
             name=variant.name,
-            code=variant.code,
             coloring=variant.coloring,
             card_warning=variant.card_warning,
         )
         for slot in variant.slots.all():
-            new_variant.slots.filter(slot=slot.slot).update(
-                material=slot.material, color=slot.color
-            )
+            new_variant.slots.filter(slot=slot.slot).update(material=slot.material)
         create_single_product(new_variant)
     return copy
 
@@ -218,17 +221,14 @@ def create_size(model: ProductModel, size: Size) -> ProductModel:
 
 
 @transaction.atomic
-def copy_part(part: Part) -> Part:
+def copy_part(part: Part, equipment: Equipment | None = None) -> Part:
+    """Копия детали; с другим станком — и с другой технологией в коде."""
     n = 2
-    while (
-        Part.objects.filter(code=f"{part.code}-{n}").exists()
-        or Part.objects.filter(name_key=name_key(f"{part.name} (копия {n})")).exists()
-    ):
+    while Part.objects.filter(name_key=name_key(f"{part.name} (копия {n})")).exists():
         n += 1
     copy = Part.objects.create(
         name=f"{part.name} (копия {n})",
-        code=f"{part.code}-{n}",
-        equipment=part.equipment,
+        equipment=equipment or part.equipment,
         material=part.material,
         batch_material_qty=part.batch_material_qty,
         batch_minutes=part.batch_minutes,
