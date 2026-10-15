@@ -11,7 +11,7 @@ Python 3.13, Django 5.2, PostgreSQL 16 (в Docker), админка на django-u
 
 Нужны Python 3.13 и Docker Desktop.
 
-```bash
+```powershell
 # 1. База данных
 docker compose up -d
 
@@ -20,7 +20,9 @@ py -3.13 -m venv .venv
 .venv\Scripts\pip install -r requirements-dev.txt
 
 # 3. Настройки
-copy .env.example .env      # и задать SECRET_KEY
+copy .env.example .env
+# и задать SECRET_KEY, сгенерировать можно так:
+.venv\Scripts\python -c "from django.core.management.utils import get_random_secret_key as g; print(g())"
 
 # 4. Таблицы, начальные справочники и роли
 .venv\Scripts\python manage.py migrate
@@ -63,7 +65,9 @@ copy .env.example .env      # и задать SECRET_KEY
 
 ## Проверки
 
-```bash
+Нужен запущенный Postgres (`docker compose up -d`): тесты создают базу `test_erp`.
+
+```powershell
 .venv\Scripts\ruff check .
 .venv\Scripts\ruff format --check .
 .venv\Scripts\python -m pytest
@@ -74,4 +78,4 @@ copy .env.example .env      # и задать SECRET_KEY
 ## Перевод интерфейса
 
 Подписи unfold, которых нет в его пакете, переведены в `locale/ru/LC_MESSAGES/django.po`.
-После правок: `python scripts/compile_locale.py`.
+После правок: `python scripts/compile_locale.py` (собранный `django.mo` коммитится вместе с `.po`).

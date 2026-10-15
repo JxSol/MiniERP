@@ -4,7 +4,7 @@
 """
 
 from contextvars import ContextVar
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.http import HttpResponse
 from django.shortcuts import redirect
@@ -26,9 +26,23 @@ def fmt_money(value: Decimal | None, digits: int = 2) -> str:
     """7988.6634 → «7 988,66 ₸» (неразрывные пробелы между разрядами)."""
     if value is None:
         return "—"
-    quantized = Decimal(value).quantize(Decimal(1).scaleb(-digits))
+    quantized = Decimal(value).quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP)
     text = f"{quantized:,.{digits}f}".replace(",", " ").replace(".", ",")
     return f"{text} ₸"
+
+
+def fmt_duration(minutes: Decimal | None) -> str:
+    """480 → «8 ч», 90 → «1 ч 30 мин», 12.5 → «12,5 мин»."""
+    if minutes is None:
+        return "—"
+    minutes = Decimal(minutes)
+    hours, rest = divmod(minutes, 60)
+    rest = rest.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP).normalize()
+    if hours and rest:
+        return f"{int(hours)} ч {rest:f} мин".replace(".", ",")
+    if hours:
+        return f"{int(hours)} ч"
+    return f"{rest:f} мин".replace(".", ",")
 
 
 def fmt_number(value: Decimal | None) -> str:
@@ -92,6 +106,8 @@ KIND_LABELS = {
 def _qty(node) -> str:
     if node.quantity is None:
         return ""
+    if node.unit == "ч":
+        return fmt_duration(node.quantity * 60)
     return f"{fmt_number(node.quantity.quantize(Decimal('0.0001')))} {node.unit}"
 
 

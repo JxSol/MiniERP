@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django import forms
 from django.contrib import admin, messages
+from django.contrib.admin.options import IS_POPUP_VAR
 from django.core.exceptions import ValidationError
 from django.db.models import Count
 from django.forms.models import BaseInlineFormSet
@@ -24,6 +25,7 @@ from core.admin_utils import (
     CostVisibilityMixin,
     can_view_cost,
     color_swatch,
+    fmt_duration,
     fmt_money,
     fmt_number,
     hx_redirect,
@@ -100,7 +102,7 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
     actions_detail = ("copy_part",)
     fieldsets = (
         (
-            "Основное",
+            "Данные",
             {
                 "classes": ["tab"],
                 "fields": (
@@ -130,7 +132,7 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
         minutes = obj.batch_minutes / obj.batch_size
         return (
             f"{fmt_number(obj.material_per_piece.quantize(obj.batch_material_qty))} "
-            f"{obj.material.get_unit_display()}, {fmt_number(minutes.quantize(obj.batch_minutes))} мин"
+            f"{obj.material.get_unit_display()}, {fmt_duration(minutes)}"
         )
 
     @display(description="% брака (итоговый)")
@@ -139,7 +141,8 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
             return "—"
         if obj.scrap_percent is not None:
             return f"{fmt_number(obj.scrap_percent)} % (свой)"
-        return f"{fmt_number(obj.equipment.effective_scrap_percent)} % (из станка или настроек)"
+        source = "из станка" if obj.equipment.scrap_percent is not None else "из общих настроек"
+        return f"{fmt_number(obj.equipment.effective_scrap_percent)} % ({source})"
 
     @display(description="Себестоимость 1 шт", ordering="cost_cached")
     def cost_display(self, obj):
@@ -228,6 +231,13 @@ class ModelOperationInline(LineInline):
     verbose_name_plural = "Сборка"
 
 
+class ColorChoiceField(forms.ModelMultipleChoiceField):
+    """Галочки с образцами цвета (ТЗ п. 5.1)."""
+
+    def label_from_instance(self, color):
+        return format_html("{}{}", color_swatch(color.hex, color.name), color.name)
+
+
 class ColorVariantsForm(BaseDialogForm):
     material = forms.ModelChoiceField(
         label="Материал",
@@ -235,7 +245,7 @@ class ColorVariantsForm(BaseDialogForm):
         widget=UnfoldAdminSelectWidget,
         help_text="Только материалы той же категории, что у деталей со слотами.",
     )
-    colors = forms.ModelMultipleChoiceField(
+    colors = ColorChoiceField(
         label="Цвета",
         queryset=Color.objects.filter(is_active=True),
         widget=UnfoldAdminCheckboxSelectMultipleWidget,
@@ -348,7 +358,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
     actions_detail = ("create_variants", "create_set", "create_size")
     fieldsets = (
         (
-            "Основное",
+            "Данные",
             {
                 "classes": ["tab"],
                 "fields": (
@@ -646,8 +656,17 @@ class VariantSlotInline(LineInline):
 
 @admin.register(Variant)
 class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAdmin):
-    list_display = ("swatches", "__str__", "code", "coloring", "cost_display", "is_active")
-    list_display_links = ("swatches", "__str__")
+    list_display = (
+        "photo",
+        "swatches",
+        "name",
+        "model",
+        "code",
+        "coloring",
+        "cost_display",
+        "is_active",
+    )
+    list_display_links = ("photo", "swatches", "name")
     list_filter = ("coloring", "model")
     search_fields = ("name", "code", "model__name", "model__code")
     autocomplete_fields = ("model",)
@@ -656,7 +675,7 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
     cost_fields = ("cost_display", "cost_tree")
     fieldsets = (
         (
-            "Основное",
+            "Данные",
             {
                 "classes": ["tab"],
                 "fields": (
@@ -691,8 +710,14 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
     def response_add(self, request, obj, post_url_continue=None):
         if obj.model.slot_names():
             messages.info(request, "Выберите цвета по слотам на вкладке «Цвета по слотам».")
-            return hx_redirect(request, _admin_url(obj))
+            if IS_POPUP_VAR not in request.POST and "_addanother" not in request.POST:
+                return hx_redirect(request, _admin_url(obj))
         return super().response_add(request, obj, post_url_continue)
+
+    @display(description="")
+    def photo(self, obj):
+        p = main_photo(variant=obj) or main_photo(model=obj.model)
+        return thumbnail(p.preview_url if p else "", 40)
 
     @display(description="")
     def swatches(self, obj):

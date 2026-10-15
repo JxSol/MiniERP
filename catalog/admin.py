@@ -1,5 +1,6 @@
 from django import forms
 from django.contrib import admin
+from django.db.models import DecimalField, ExpressionWrapper, F
 from django.utils.html import format_html, format_html_join, mark_safe
 from unfold.decorators import display
 from unfold.widgets import UnfoldAdminColorInputWidget
@@ -114,7 +115,7 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
     readonly_fields = ("unit_price_display", "where_used")
     fieldsets = (
         (
-            "Основное",
+            "Данные",
             {
                 "classes": ["tab"],
                 "fields": (
@@ -134,13 +135,23 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
     )
 
     def get_queryset(self, request):
-        return super().get_queryset(request).select_related("category").prefetch_related("colors")
+        return (
+            super()
+            .get_queryset(request)
+            .select_related("category")
+            .prefetch_related("colors")
+            .annotate(
+                unit_price_db=ExpressionWrapper(
+                    F("pack_price") / F("pack_size"), output_field=DecimalField()
+                )
+            )
+        )
 
     def save_model(self, request, obj, form, change):
         obj._changed_by = request.user
         super().save_model(request, obj, form, change)
 
-    @display(description="Цена за единицу", ordering="pack_price")
+    @display(description="Цена за единицу", ordering="unit_price_db")
     def unit_price_display(self, obj):
         if not obj.pk and obj.pack_price is None:
             return "—"

@@ -1,11 +1,11 @@
-# Перевод подписей django-unfold, которых нет в его пакете.
+﻿# Перевод подписей django-unfold, которых нет в его пакете.
 # После правок: python scripts/compile_locale.py
 
 msgid ""
 msgstr "Content-Type: text/plain; charset=UTF-8\nLanguage: ru\n"
 
 msgid "General"
-msgstr "Карточка"
+msgstr "Основное"
 
 msgid "Filters"
 msgstr "Фильтры"
@@ -192,3 +192,102 @@ msgstr "Нет, вернуться"
 
 msgid "This item will be deleted."
 msgstr "Запись будет удалена."
+
+msgid "Select value"
+msgstr "— выберите —"
+
+msgid "Choose file to upload"
+msgstr "Выберите файл"
+
+msgid "Select action"
+msgstr "Выберите действие"
+
+msgid "Select action to run"
+msgstr "Действие для выбранных"
+
+msgid "Select record"
+msgstr "Выбрать запись"
+
+msgid "Select all"
+msgstr "Выбрать все"
+
+msgid "Click here to select the objects across all pages"
+msgstr "Выбрать записи на всех страницах"
+
+msgid "Add another %(verbose_name)s"
+msgstr "Добавить ещё"
+
+msgid "Changes"
+msgstr "Изменения"
+
+msgid "Field"
+msgstr "Поле"
+
+msgid "Old value"
+msgstr "Было"
+
+msgid "New value"
+msgstr "Стало"
+
+msgid "Revert"
+msgstr "Вернуть эту версию"
+
+msgid "Change History"
+msgstr "Изменить запись истории"
+
+msgid "Change reason"
+msgstr "Причина изменения"
+
+msgid "Changed by"
+msgstr "Кто изменил"
+
+msgid "Date/time"
+msgstr "Дата и время"
+
+msgid "Comment"
+msgstr "Комментарий"
+
+msgid "Object"
+msgstr "Запись"
+
+msgid "Choose a date from the list below to revert to a previous version of this object."
+msgstr "Выберите дату в списке, чтобы вернуть прежнюю версию записи."
+
+msgid "Press the 'Revert' button below to revert to this version of the object."
+msgstr "Нажмите «Вернуть эту версию», чтобы восстановить это состояние записи."
+
+msgid "Press the 'Change History' button below to edit the history."
+msgstr "Нажмите «Изменить запись истории», чтобы отредактировать историю."
+
+msgid "This object doesn’t have a change history. It probably wasn’t added via this admin site."
+msgstr "У этой записи пока нет истории изменений."
+
+msgid "Image preview"
+msgstr "Предпросмотр"
+
+msgid "Sorting priority:"
+msgstr "Порядок сортировки:"
+
+msgid "Forgotten your password or username?"
+msgstr "Забыли пароль или логин?"
+
+msgid "Unknown content"
+msgstr "Неизвестно"
+
+msgid "History"
+msgstr "История"
+
+msgid "Home"
+msgstr "Главная"
+
+msgid "User"
+msgstr "Пользователь"
+
+msgid "Action"
+msgstr "Действие"
+
+msgid "View on site"
+msgstr "Открыть на сайте"
+
+msgid "Please correct the error below."
+msgstr "Исправьте ошибку ниже."

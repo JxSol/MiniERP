@@ -80,7 +80,7 @@ class MaterialCategory(UniqueNameModel):
         choices=MaterialKind.choices,
         help_text="У вложенной категории берётся от родителя.",
     )
-    path = models.CharField(max_length=500, editable=False, db_index=True)
+    path = models.CharField("Полное название", max_length=500, editable=False, db_index=True)
 
     name_scope = ("parent",)
 

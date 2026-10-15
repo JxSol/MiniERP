@@ -66,7 +66,7 @@ class ProductCategory(UniqueNameModel):
         on_delete=models.PROTECT,
         related_name="children",
     )
-    path = models.CharField(max_length=500, editable=False, db_index=True)
+    path = models.CharField("Полное название", max_length=500, editable=False, db_index=True)
 
     name_scope = ("parent",)
 

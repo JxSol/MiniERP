@@ -110,7 +110,7 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
     actions_detail = ("fix_cost_detail",)
     fieldsets = (
         (
-            "Основное",
+            "Данные",
             {
                 "classes": ["tab"],
                 "fields": (
@@ -168,10 +168,12 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
         snapshot = obj.last_snapshot if obj.pk else None
         if not snapshot:
             return "Не фиксировалась"
+        who = f", {snapshot.created_by}" if snapshot.created_by else ""
         return format_html(
-            "{} <span style='opacity:.6'>({:%d.%m.%Y})</span>",
+            "{} <span style='opacity:.6'>({:%d.%m.%Y}{})</span>",
             fmt_money(snapshot.total),
             snapshot.created_at,
+            who,
         )
 
     @display(description="Рост с фиксации")
@@ -181,9 +183,12 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
             return "—"
         alert = growth >= SiteSettings.load().cost_growth_alert_percent
         sign = "+" if growth > 0 else ""
+        diff = obj.cost_cached - obj.last_snapshot.total
         return format_html(
-            "<span style='{}'>{}{} %</span>",
+            "<span style='{}'>{}{} ({}{} %)</span>",
             "color:#dc2626;font-weight:600" if alert else "",
+            sign,
+            fmt_money(diff),
             sign,
             fmt_number(growth.quantize(growth.__class__("0.1"))),
         )

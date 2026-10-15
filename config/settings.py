@@ -8,6 +8,7 @@
 from pathlib import Path
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -22,6 +23,16 @@ SECRET_KEY = env("SECRET_KEY")
 DEBUG = env("DEBUG")
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 CSRF_TRUSTED_ORIGINS = env("CSRF_TRUSTED_ORIGINS")
+
+if not DEBUG:
+    if SECRET_KEY in ("", "change-me") or len(SECRET_KEY) < 40:
+        raise ImproperlyConfigured(
+            "Задайте надёжный SECRET_KEY в .env (см. README, раздел «Настройки»)."
+        )
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=True)
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 
 # Приложения
@@ -136,6 +147,8 @@ UNFOLD = {
     "SITE_HEADER": "Мини-ERP",
     "SITE_SYMBOL": "precision_manufacturing",
     "SHOW_HISTORY": True,
+    # Глобальный поиск по артикулу, названию, штрихкоду (Ctrl+K)
+    "COMMAND": {"search_models": True, "show_history": True},
     "SIDEBAR": {
         "show_search": True,
         "show_all_applications": False,
