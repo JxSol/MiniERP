@@ -1,6 +1,6 @@
 """
-Экраны склада: записи (купили, напечатали, собрали, упаковали, переместили,
-пересчитали), остатки и журнал движений.
+Экраны склада и журнала производства: документы (закупка, выпуск деталей, сборка,
+упаковка, перемещение, инвентаризация), остатки по вкладкам и движения по складу.
 """
 
 from django import forms
@@ -11,6 +11,7 @@ from django.urls import reverse
 from django.utils.html import format_html
 from unfold.admin import ModelAdmin
 from unfold.decorators import action, display
+from unfold.views import ChangeList
 from unfold.widgets import UnfoldAdminSelectWidget
 
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
@@ -61,7 +62,7 @@ class WarehouseAdmin(ArchiveAdmin):
     fields = ("name", "is_default", "order", "is_active", "notes")
 
 
-# --- Общее для записей -------------------------------------------------------------
+# --- Общее для документов -------------------------------------------------------------
 
 
 class DocumentForm(ActiveChoicesForm):
@@ -74,7 +75,7 @@ class DocumentForm(ActiveChoicesForm):
 
 
 class DocumentAdmin(PageHelpMixin, HistoryAdmin, ModelAdmin):
-    """Запись проводится при сохранении; отменить можно кнопкой вверху."""
+    """Документ проводится при сохранении; отменить можно кнопкой вверху."""
 
     form = DocumentForm
     list_filter = ("status", "warehouse")
@@ -112,7 +113,7 @@ class DocumentAdmin(PageHelpMixin, HistoryAdmin, ModelAdmin):
         except Shortage as error:
             messages.error(
                 request,
-                "Запись сохранена как черновик и НЕ проведена. " + " ".join(error.messages),
+                "Документ сохранён как черновик и НЕ проведён. " + " ".join(error.messages),
             )
         else:
             messages.success(request, f"{doc.number} проведён, остатки обновлены.")
@@ -122,15 +123,15 @@ class DocumentAdmin(PageHelpMixin, HistoryAdmin, ModelAdmin):
         return request.user.has_perm(f"{opts.app_label}.change_{opts.model_name}")
 
     @action(
-        description="Отменить запись",
+        description="Отменить документ",
         icon="undo",
         url_path="cancel",
         permissions=["cancel"],
         dialog={
-            "title": "Отменить запись",
+            "title": "Отменить документ",
             "description": "Движения по складу будут удалены, остатки пересчитаны. "
-            "Запись останется в истории как отменённая.",
-            "form_submit_text": "Отменить запись",
+            "Документ останется в истории как отменённый.",
+            "form_submit_text": "Отменить документ",
         },
     )
     def cancel_document(self, request, form, object_id):
@@ -147,7 +148,7 @@ class DocumentAdmin(PageHelpMixin, HistoryAdmin, ModelAdmin):
         )
 
 
-# --- Приход ------------------------------------------------------------------------
+# --- Закупки ------------------------------------------------------------------------
 
 
 class ReceiptLineForm(ActiveChoicesForm):
@@ -194,7 +195,7 @@ class ReceiptLineInline(LineInline):
     )
     readonly_fields = ("quantity_display", "total_display")
     min_num = 1
-    verbose_name_plural = "Что купили"
+    verbose_name_plural = "Позиции"
 
     @display(description="Итого единиц")
     def quantity_display(self, obj):
@@ -212,7 +213,7 @@ class ReceiptAdmin(DocumentAdmin):
     inlines = (ReceiptLineInline,)
     fields = ("number", "date", "warehouse", "status_badge", "notes", "created_by", "posted_at")
 
-    @display(description="Что купили")
+    @display(description="Позиции")
     def lines_display(self, obj):
         return "; ".join(f"{line.material} × {fmt_number(line.packs)}" for line in obj.lines.all())
 
@@ -350,7 +351,7 @@ class TransferLineInline(LineInline):
     autocomplete_fields = ITEM_FIELDS
     fields = (*ITEM_FIELDS, "quantity")
     min_num = 1
-    verbose_name_plural = "Что переместили"
+    verbose_name_plural = "Позиции"
 
 
 class InventoryLineInline(LineInline):
@@ -360,7 +361,7 @@ class InventoryLineInline(LineInline):
     fields = (*ITEM_FIELDS, "counted_qty", "difference", "reason")
     readonly_fields = ("difference",)
     min_num = 1
-    verbose_name_plural = "Что пересчитали"
+    verbose_name_plural = "Позиции"
 
 
 @admin.register(Transfer)
@@ -399,6 +400,19 @@ class InventoryAdmin(DocumentAdmin):
 # --- Остатки и движения ------------------------------------------------------------
 
 
+KIND_FIELDS = {
+    ItemKind.MATERIAL.value: "material",
+    ItemKind.PART.value: "part",
+    ItemKind.VARIANT.value: "variant",
+    ItemKind.PRODUCT.value: "product",
+}
+
+
+def filter_kind(queryset, kind):
+    field = KIND_FIELDS.get(kind)
+    return queryset.filter(**{f"{field}__isnull": False}) if field else queryset
+
+
 class KindFilter(SimpleListFilter):
     title = "Уровень"
     parameter_name = "kind"
@@ -407,16 +421,7 @@ class KindFilter(SimpleListFilter):
         return ItemKind.choices
 
     def queryset(self, request, queryset):
-        value = self.value()
-        if value == ItemKind.MATERIAL:
-            return queryset.filter(material__isnull=False)
-        if value == ItemKind.PART:
-            return queryset.filter(part__isnull=False)
-        if value == ItemKind.VARIANT:
-            return queryset.filter(variant__isnull=False)
-        if value == ItemKind.PRODUCT:
-            return queryset.filter(product__isnull=False)
-        return queryset
+        return filter_kind(queryset, self.value())
 
 
 class LowStockFilter(SimpleListFilter):
@@ -444,17 +449,41 @@ class ReadOnlyAdmin(PageHelpMixin, ModelAdmin):
         return False
 
 
+# Вкладки остатков: ?kind=material | part | variant | product (без параметра — материалы)
+BALANCE_TABS = (
+    (ItemKind.MATERIAL.value, "Материалы"),
+    (ItemKind.PART.value, "Детали"),
+    (ItemKind.VARIANT.value, "Изделия"),
+    (ItemKind.PRODUCT.value, "Товары"),
+)
+DEFAULT_BALANCE_KIND = ItemKind.MATERIAL.value
+
+
+def balance_kind(request) -> str:
+    kind = request.GET.get("kind", DEFAULT_BALANCE_KIND)
+    return kind if kind in dict(BALANCE_TABS) else DEFAULT_BALANCE_KIND
+
+
+class KindTabChangeList(ChangeList):
+    """Параметр ?kind= задаёт вкладку, а не фильтр по полю модели."""
+
+    def get_filters_params(self, params=None):
+        params = super().get_filters_params(params)
+        params.pop("kind", None)
+        return params
+
+    def get_queryset(self, request, exclude_parameters=None):
+        # Фильтруем корневой queryset, чтобы счётчик «N всего» считал только вкладку
+        self.root_queryset = filter_kind(self.root_queryset, balance_kind(request))
+        return super().get_queryset(request, exclude_parameters)
+
+
 @admin.register(StockBalance)
 class StockBalanceAdmin(ReadOnlyAdmin):
-    list_display = (
-        "kind_display",
-        "item_display",
-        "warehouse",
-        "quantity_display",
-        "total_display",
-        "min_display",
-    )
-    list_filter = (KindFilter, "warehouse", LowStockFilter)
+    """Остатки по вкладкам: материалы, детали, изделия, товары."""
+
+    list_display = ("item_display", "warehouse", "quantity_display", "total_display")
+    list_filter = ("warehouse",)
     search_fields = (
         "material__name",
         "material__color__name",
@@ -466,6 +495,19 @@ class StockBalanceAdmin(ReadOnlyAdmin):
         "product__sku",
     )
     list_filter_submit = False
+
+    def get_changelist(self, request, **kwargs):
+        return KindTabChangeList
+
+    def get_list_display(self, request):
+        if balance_kind(request) == ItemKind.MATERIAL.value:
+            return (*self.list_display, "min_display")
+        return self.list_display
+
+    def get_list_filter(self, request):
+        if balance_kind(request) == ItemKind.MATERIAL.value:
+            return ("warehouse", LowStockFilter)
+        return ("warehouse",)
 
     def get_queryset(self, request):
         self._totals = reports.totals_by_item()
@@ -481,10 +523,6 @@ class StockBalanceAdmin(ReadOnlyAdmin):
                 "product",
             )
         )
-
-    @display(description="Уровень")
-    def kind_display(self, obj):
-        return ItemKind(obj.kind).label
 
     @display(description="Позиция")
     def item_display(self, obj):
@@ -545,7 +583,7 @@ class StockMoveAdmin(ReadOnlyAdmin):
             .prefetch_related("document")
         )
 
-    @display(description="Запись")
+    @display(description="Документ")
     def document_display(self, obj):
         return _doc_link(obj)
 

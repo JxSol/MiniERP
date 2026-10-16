@@ -89,7 +89,7 @@ class Product(UniqueNameModel):
         validators=[MinValueValidator(Decimal("0.1"))],
     )
     weight_g = models.PositiveIntegerField(
-        "Вес в упаковке, г", null=True, blank=True, validators=[MinValueValidator(1)]
+        "Масса в упаковке, г", null=True, blank=True, validators=[MinValueValidator(1)]
     )
     description = models.TextField("Описание", blank=True, help_text="Пусто — из модели.")
 
@@ -139,7 +139,7 @@ class Product(UniqueNameModel):
         if not all([self.length_cm, self.width_cm, self.height_cm]):
             problems.append("не указаны габариты в упаковке")
         if not self.weight_g:
-            problems.append("не указан вес в упаковке")
+            problems.append("не указана масса в упаковке")
         return problems
 
     def save(self, *args, **kwargs):

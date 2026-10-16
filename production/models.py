@@ -17,6 +17,7 @@ from catalog.models import (
     MaterialKind,
     OperationLevel,
     OperationType,
+    Unit,
 )
 from core.models import (
     ArchivableModel,
@@ -258,6 +259,39 @@ class ProductModel(UniqueNameModel):
         blank=True,
         validators=[MinValueValidator(Decimal("0.01"))],
     )
+    weight_g = models.PositiveIntegerField(
+        "Масса изделия, г",
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1)],
+        help_text="Готовое изделие без упаковки, по весам. Рядом — расчётная масса пластика "
+        "по нормам деталей, для сверки.",
+    )
+    length_cm = models.DecimalField(
+        "Длина, см",
+        max_digits=7,
+        decimal_places=1,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.1"))],
+        help_text="Габариты готового изделия без упаковки. Габариты в упаковке — у товара.",
+    )
+    width_cm = models.DecimalField(
+        "Ширина, см",
+        max_digits=7,
+        decimal_places=1,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.1"))],
+    )
+    height_cm = models.DecimalField(
+        "Высота, см",
+        max_digits=7,
+        decimal_places=1,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.1"))],
+    )
     base_model = models.ForeignKey(
         "self",
         verbose_name="Базовая модель",
@@ -342,6 +376,18 @@ class ProductModel(UniqueNameModel):
             if line.slot and line.slot not in result:
                 result[line.slot] = line.part.material
         return result
+
+    def calculated_weight_g(self) -> Decimal | None:
+        """
+        Расчётная масса пластика: нормы расхода деталей × количество, только по материалам
+        в граммах (листовые и покупные части не учитываются). None — нечего считать.
+        """
+        total, found = Decimal(0), False
+        for line in self.model_parts.select_related("part__material"):
+            if line.part.material.unit == Unit.GRAM:
+                total += line.part.material_per_piece * line.quantity
+                found = True
+        return total if found else None
 
 
 class ModelPart(models.Model):

@@ -124,3 +124,30 @@ def test_seller_has_no_stock_access(client, demo):
     client.force_login(user_in(SELLER, "seller"))
     assert client.get(reverse("admin:stock_stockbalance_changelist")).status_code == 403
     assert client.get(reverse("admin:stock_receipt_add")).status_code == 403
+
+
+def test_balance_tabs_split_levels(client, admin_user, demo):
+    """Остатки: без параметра — материалы; ?kind=part — только детали; вкладки видны."""
+    client.force_login(admin_user)
+    url = reverse("admin:stock_stockbalance_changelist")
+    default = client.get(url)
+    assert default.status_code == 200
+    rows = list(default.context_data["cl"].result_list)
+    assert rows and all(b.material_id for b in rows)
+    html = default.content.decode()
+    for kind, title in (("part", "Детали"), ("variant", "Изделия"), ("product", "Товары")):
+        assert f"?kind={kind}" in html and title in html
+    parts = client.get(url + "?kind=part")
+    rows = list(parts.context_data["cl"].result_list)
+    assert rows and all(b.part_id for b in rows)
+    assert "min_display" in default.context_data["cl"].list_display
+    assert "min_display" not in parts.context_data["cl"].list_display
+    assert client.get(url + "?kind=nonsense").status_code == 200
+
+
+def test_production_journal_tabs(client, admin_user, demo):
+    client.force_login(admin_user)
+    for name in ("productionrun", "assembly", "packing"):
+        html = client.get(reverse(f"admin:stock_{name}_changelist")).content.decode()
+        for title in ("Выпуск деталей", "Сборка изделий", "Упаковка товаров"):
+            assert title in html, (name, title)

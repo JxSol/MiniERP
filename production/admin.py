@@ -376,6 +376,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
     inlines = (ModelPartInline, ModelComponentInline, ModelOperationInline, ModelPhotoInline)
     readonly_fields = (
         "code",
+        "calculated_weight_display",
         "variants_overview",
         "products_overview",
         "sizes_overview",
@@ -395,6 +396,8 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
                     "tags",
                     "status",
                     "description",
+                    ("weight_g", "calculated_weight_display"),
+                    ("length_cm", "width_cm", "height_cm"),
                     ("default_packaging", "default_packing_minutes"),
                     "marketplace_group",
                     "is_active",
@@ -441,6 +444,11 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
     @display(description="Себестоимость", ordering="cost_cached")
     def cost_display(self, obj):
         return fmt_money(obj.cost_cached)
+
+    @display(description="Расчётная масса пластика по нормам деталей")
+    def calculated_weight_display(self, obj):
+        weight = obj.calculated_weight_g() if obj.pk else None
+        return fmt_quantity(weight, "г") if weight is not None else "—"
 
     @display(description="Варианты модели")
     def variants_overview(self, obj):

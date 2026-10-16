@@ -132,7 +132,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Оформление админки
 
 from django.templatetags.static import static  # noqa: E402
-from django.urls import reverse_lazy  # noqa: E402
+from django.urls import reverse, reverse_lazy  # noqa: E402
 
 
 def _item(title, icon, url_name, perm):
@@ -141,6 +141,20 @@ def _item(title, icon, url_name, perm):
         "icon": icon,
         "link": reverse_lazy(url_name),
         "permission": f"core.navigation.{perm}",
+    }
+
+
+def _tab(title, url_name, perm):
+    return {"title": title, "link": reverse_lazy(url_name), "permission": f"core.navigation.{perm}"}
+
+
+def _balance_tab(title, kind):
+    """Вкладка остатков: тот же список с параметром ?kind=; без параметра — материалы."""
+    return {
+        "title": title,
+        "link": lambda request: f"{reverse('admin:stock_stockbalance_changelist')}?kind={kind}",
+        "active": lambda request: request.GET.get("kind", "material") == kind,
+        "permission": "core.navigation.view_stock",
     }
 
 
@@ -172,41 +186,37 @@ UNFOLD = {
                         "view_stock",
                     ),
                     _item(
-                        "Купили", "shopping_cart", "admin:stock_receipt_changelist", "view_receipt"
+                        "Закупки", "shopping_cart", "admin:stock_receipt_changelist", "view_receipt"
                     ),
                     _item(
-                        "Напечатали / вырезали",
-                        "print",
-                        "admin:stock_productionrun_changelist",
-                        "view_run",
-                    ),
-                    _item(
-                        "Собрали",
-                        "construction",
-                        "admin:stock_assembly_changelist",
-                        "view_assembly",
-                    ),
-                    _item(
-                        "Упаковали", "package_2", "admin:stock_packing_changelist", "view_packing"
-                    ),
-                    _item(
-                        "Переместили",
+                        "Перемещения",
                         "local_shipping",
                         "admin:stock_transfer_changelist",
                         "view_transfer",
                     ),
                     _item(
-                        "Пересчитали",
+                        "Инвентаризация",
                         "fact_check",
                         "admin:stock_inventory_changelist",
                         "view_inventory",
                     ),
-                    _item("Движения", "list_alt", "admin:stock_stockmove_changelist", "view_moves"),
+                    _item(
+                        "Движения по складу",
+                        "list_alt",
+                        "admin:stock_stockmove_changelist",
+                        "view_moves",
+                    ),
                 ],
             },
             {
                 "title": "Производство",
                 "items": [
+                    _item(
+                        "Журнал производства",
+                        "conveyor_belt",
+                        "admin:stock_productionrun_changelist",
+                        "view_run",
+                    ),
                     _item(
                         "Модели",
                         "deployed_code",
@@ -294,4 +304,24 @@ UNFOLD = {
             },
         ],
     },
+    # Вкладки над списками: остатки по уровням и три шага журнала производства
+    "TABS": [
+        {
+            "models": ["stock.stockbalance"],
+            "items": [
+                _balance_tab("Материалы", "material"),
+                _balance_tab("Детали", "part"),
+                _balance_tab("Изделия", "variant"),
+                _balance_tab("Товары", "product"),
+            ],
+        },
+        {
+            "models": ["stock.productionrun", "stock.assembly", "stock.packing"],
+            "items": [
+                _tab("Выпуск деталей", "admin:stock_productionrun_changelist", "view_run"),
+                _tab("Сборка изделий", "admin:stock_assembly_changelist", "view_assembly"),
+                _tab("Упаковка товаров", "admin:stock_packing_changelist", "view_packing"),
+            ],
+        },
+    ],
 }

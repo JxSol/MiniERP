@@ -37,7 +37,7 @@ ItemKey = tuple[str, int, int | None]
 
 class Warehouse(UniqueNameModel):
     is_default = models.BooleanField(
-        "По умолчанию", default=False, help_text="Подставляется в новые записи."
+        "По умолчанию", default=False, help_text="Подставляется в новые документы."
     )
     order = models.PositiveIntegerField("Порядок", default=0)
 
@@ -219,8 +219,8 @@ class StockMove(StockItemMixin):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        verbose_name = "Движение"
-        verbose_name_plural = "Движения"
+        verbose_name = "Движение по складу"
+        verbose_name_plural = "Движения по складу"
         ordering = ["-date", "-pk"]
         constraints = [_item_constraint("stock_move_single_item")]
         indexes = [
@@ -303,7 +303,7 @@ class Shortage(ValidationError):
 
 class StockDocument(models.Model):
     """
-    Общее для всех записей склада. Документ проводится методом post(): его прежние
+    Общее для всех складских документов. Документ проводится методом post(): его прежние
     движения удаляются и создаются заново, остатки проверяются на минус и пересчитываются.
     """
 
@@ -336,7 +336,7 @@ class StockDocument(models.Model):
         ordering = ["-date", "-pk"]
 
     def __str__(self):
-        return self.number or f"{self._meta.verbose_name} (новая запись)"
+        return self.number or f"{self._meta.verbose_name} (новый документ)"
 
     def save(self, *args, **kwargs):
         if not self.number:
@@ -436,14 +436,14 @@ class StockDocument(models.Model):
 
 
 class Receipt(StockDocument):
-    """Купили материалы."""
+    """Закупка материалов у поставщиков."""
 
     number_prefix = "BUY"
     history = HistoricalRecords()
 
     class Meta(StockDocument.Meta):
-        verbose_name = "Приход (купили)"
-        verbose_name_plural = "Приход (купили)"
+        verbose_name = "Закупка"
+        verbose_name_plural = "Закупки"
 
     def build_moves(self):
         return [
@@ -488,7 +488,7 @@ class ReceiptLine(models.Model):
 
     class Meta:
         verbose_name = "Строка прихода"
-        verbose_name_plural = "Что купили"
+        verbose_name_plural = "Позиции закупки"
 
     def __str__(self):
         return f"{self.material} × {self.packs}"
@@ -511,7 +511,7 @@ class ReceiptLine(models.Model):
 
 
 class ProductionRun(StockDocument):
-    """Напечатали или вырезали партию одной детали."""
+    """Выпуск деталей: напечатали или вырезали партию одной детали."""
 
     number_prefix = "MAKE"
 
@@ -539,8 +539,8 @@ class ProductionRun(StockDocument):
     history = HistoricalRecords()
 
     class Meta(StockDocument.Meta):
-        verbose_name = "Выпуск (напечатали / вырезали)"
-        verbose_name_plural = "Выпуск (напечатали / вырезали)"
+        verbose_name = "Выпуск деталей"
+        verbose_name_plural = "Выпуск деталей"
 
     def clean_fields(self, exclude=None):
         # Умолчания из детали подставляются до проверки обязательных полей
@@ -605,7 +605,7 @@ def _line_materials(material: Material) -> list[Material]:
 
 
 class Assembly(StockDocument):
-    """Собрали изделия (варианты) из деталей и покупных комплектующих."""
+    """Сборка изделий (вариантов) из деталей и покупных комплектующих."""
 
     number_prefix = "ASM"
 
@@ -618,8 +618,8 @@ class Assembly(StockDocument):
     history = HistoricalRecords()
 
     class Meta(StockDocument.Meta):
-        verbose_name = "Сборка (собрали)"
-        verbose_name_plural = "Сборка (собрали)"
+        verbose_name = "Сборка изделий"
+        verbose_name_plural = "Сборка изделий"
 
     def clean(self):
         super().clean()
@@ -688,7 +688,7 @@ class Assembly(StockDocument):
 
 
 class Packing(StockDocument):
-    """Упаковали изделия в товар (поштучный или набор)."""
+    """Упаковка изделий в товар (поштучный или набор)."""
 
     number_prefix = "PACK"
 
@@ -701,8 +701,8 @@ class Packing(StockDocument):
     history = HistoricalRecords()
 
     class Meta(StockDocument.Meta):
-        verbose_name = "Упаковка (упаковали)"
-        verbose_name_plural = "Упаковка (упаковали)"
+        verbose_name = "Упаковка товаров"
+        verbose_name_plural = "Упаковка товаров"
 
     def clean(self):
         super().clean()
@@ -743,7 +743,7 @@ class Packing(StockDocument):
 
 
 class Transfer(StockDocument):
-    """Переместили позиции с одного склада на другой."""
+    """Перемещение позиций с одного склада на другой."""
 
     number_prefix = "MOVE"
 
@@ -753,8 +753,8 @@ class Transfer(StockDocument):
     history = HistoricalRecords()
 
     class Meta(StockDocument.Meta):
-        verbose_name = "Перемещение (переместили)"
-        verbose_name_plural = "Перемещение (переместили)"
+        verbose_name = "Перемещение"
+        verbose_name_plural = "Перемещения"
 
     def clean(self):
         super().clean()
@@ -775,7 +775,7 @@ class TransferLine(StockItemMixin):
 
     class Meta:
         verbose_name = "Строка перемещения"
-        verbose_name_plural = "Что переместили"
+        verbose_name_plural = "Позиции перемещения"
         constraints = [_item_constraint("stock_transferline_single_item")]
 
     def __str__(self):
@@ -790,14 +790,14 @@ class TransferLine(StockItemMixin):
 
 
 class Inventory(StockDocument):
-    """Пересчитали: фактические остатки; разница записывается как корректировка."""
+    """Инвентаризация: фактические остатки; разница записывается как корректировка."""
 
     number_prefix = "INV"
     history = HistoricalRecords()
 
     class Meta(StockDocument.Meta):
-        verbose_name = "Инвентаризация (пересчитали)"
-        verbose_name_plural = "Инвентаризация (пересчитали)"
+        verbose_name = "Инвентаризация"
+        verbose_name_plural = "Инвентаризации"
 
     def build_moves(self):
         moves = []
@@ -832,7 +832,7 @@ class InventoryLine(StockItemMixin):
 
     class Meta:
         verbose_name = "Строка инвентаризации"
-        verbose_name_plural = "Что пересчитали"
+        verbose_name_plural = "Позиции инвентаризации"
         constraints = [_item_constraint("stock_inventoryline_single_item")]
 
     def __str__(self):

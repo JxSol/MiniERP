@@ -19,7 +19,7 @@ from core.roles import SELLER, TECHNOLOGIST
 from costing.services import fix_cost, recalculate_all
 from gallery.models import Photo, PhotoKind, main_photo_for_product
 from production import generators
-from production.models import Part, Variant
+from production.models import Part, ProductModel, Variant
 from sales.models import Product, ProductStatus, validate_barcode
 
 pytestmark = pytest.mark.django_db
@@ -254,3 +254,11 @@ def test_seller_cannot_see_cost(demo):
     assert technologist.has_perm("sales.view_cost")
     assert not technologist.has_perm("catalog.add_color")  # палитру ведёт только администратор
     assert not technologist.has_perm("catalog.delete_material")  # только архив
+
+
+def test_model_calculated_weight_counts_only_gram_parts(demo):
+    luna = ProductModel.objects.get(name="Светильник Луна")
+    # плафон 250 г × 1 + фиксатор 5 г × 2; фанерная подставка считается в листах — не входит
+    assert luna.calculated_weight_g() == D(260)
+    luna.weight_g, luna.length_cm = 270, D("12.5")
+    luna.full_clean(exclude=["name_key"])
