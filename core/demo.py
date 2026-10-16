@@ -204,12 +204,15 @@ def load_demo_stock() -> None:
         ProductionRun,
         Receipt,
         ReceiptLine,
+        Transfer,
+        TransferLine,
         Warehouse,
     )
 
     luna = ProductModel.objects.get(name="Светильник Луна")
     workshop = Warehouse.objects.create(name="Цех", is_default=True)
     Warehouse.objects.create(name="Магазин", order=1)
+    showcase = Warehouse.objects.create(name="Магазин — витрина", order=2, is_showcase=True)
 
     receipt = Receipt.objects.create(warehouse=workshop, notes="первая закупка")
     for name, color, packs in (
@@ -269,3 +272,10 @@ def load_demo_stock() -> None:
         warehouse=workshop, variant=variant_of(luna, "Белый"), quantity=2
     ).post()
     Packing.objects.create(warehouse=workshop, product=product_of(luna, "Белый"), quantity=1).post()
+
+    # выставочный образец: вторая «Луна» уезжает на витрину магазина
+    transfer = Transfer.objects.create(
+        warehouse=workshop, to_warehouse=showcase, notes="образец на витрину"
+    )
+    TransferLine.objects.create(transfer=transfer, variant=variant_of(luna, "Белый"), quantity=1)
+    transfer.post()

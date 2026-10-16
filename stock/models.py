@@ -39,6 +39,12 @@ class Warehouse(UniqueNameModel):
     is_default = models.BooleanField(
         "По умолчанию", default=False, help_text="Подставляется в новые документы."
     )
+    is_showcase = models.BooleanField(
+        "Витрина: образцы, не для продажи",
+        default=False,
+        help_text="Остатки этого склада не входят в «Доступно» и показываются в остатках отдельно "
+        "как «На витрине». Образцы отправляются сюда документом «Перемещения».",
+    )
     order = models.PositiveIntegerField("Порядок", default=0)
 
     class Meta:
@@ -49,6 +55,13 @@ class Warehouse(UniqueNameModel):
             models.UniqueConstraint(fields=["name_key"], name="stock_warehouse_name_uniq")
         ]
 
+    def clean(self):
+        super().clean()
+        if self.is_default and self.is_showcase:
+            raise ValidationError(
+                {"is_showcase": "Склад-витрина не может быть складом по умолчанию."}
+            )
+
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
         if self.is_default:
@@ -56,7 +69,11 @@ class Warehouse(UniqueNameModel):
 
     @classmethod
     def default(cls) -> Warehouse | None:
-        return cls.objects.filter(is_active=True).order_by("-is_default", "order", "pk").first()
+        return (
+            cls.objects.filter(is_active=True, is_showcase=False)
+            .order_by("-is_default", "order", "pk")
+            .first()
+        )
 
 
 # --- Позиция склада ----------------------------------------------------------------

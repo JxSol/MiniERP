@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError
 from catalog.models import Equipment, Material
 from core.demo import load_demo, product_of, variant_of
 from costing.services import recalculate_all
-from production.models import Part
+from production.models import Part, ProductModel
 from stock.models import (
     Assembly,
     DocumentStatus,
@@ -32,7 +32,7 @@ from stock.models import (
     balance_of,
     total_of,
 )
-from stock.reports import fact_scrap_percent, low_stock_materials
+from stock.reports import fact_scrap_percent, low_stock_materials, totals_by_item
 
 pytestmark = pytest.mark.django_db
 
@@ -326,3 +326,21 @@ def test_reason_must_match_direction(demo):
     )
     assert {"Образцы и подарки", "Прочее"} <= for_writeoff
     assert "Начальные остатки" not in for_writeoff
+
+
+def test_showcase_warehouse_is_not_available(demo):
+    """Образец на витрине виден отдельно и не входит в «Доступно»."""
+    luna = ProductModel.objects.get(name="Светильник Луна")
+    key = (ItemKind.VARIANT.value, variant_of(luna, "Белый").pk, None)
+    showcase = Warehouse.objects.get(name="Магазин — витрина")
+    assert showcase.is_showcase
+    assert balance_of(showcase.pk, key) == D(1)
+    assert totals_by_item(showcase=False).get(key, D(0)) == D(
+        0
+    )  # 2 собрали − 1 упаковали − 1 на витрину
+    assert totals_by_item(showcase=True)[key] == D(1)
+    assert totals_by_item()[key] == D(1)
+    assert Warehouse.default().name == "Цех"
+    showcase.is_default = True
+    with pytest.raises(ValidationError, match="по умолчанию"):
+        showcase.full_clean()

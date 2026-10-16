@@ -8,12 +8,23 @@ from django.db.models import Sum
 
 from catalog.models import Material
 
-from .models import DocumentStatus, ProductionRun, StockBalance
+from .models import DocumentStatus, ProductionRun, StockBalance, Warehouse
 
 
-def totals_by_item() -> dict[tuple, Decimal]:
-    """{ключ позиции: остаток по всем складам} одним запросом."""
-    rows = StockBalance.objects.values(
+def has_showcase() -> bool:
+    """Есть ли хотя бы один действующий склад-витрина (тогда в остатках своя колонка)."""
+    return Warehouse.objects.filter(is_showcase=True, is_active=True).exists()
+
+
+def totals_by_item(*, showcase: bool | None = None) -> dict[tuple, Decimal]:
+    """
+    {ключ позиции: остаток по складам} одним запросом.
+    showcase=False — только обычные склады (доступно), True — только витрины, None — все.
+    """
+    qs = StockBalance.objects.all()
+    if showcase is not None:
+        qs = qs.filter(warehouse__is_showcase=showcase)
+    rows = qs.values(
         "material_id", "part_id", "part_material_id", "variant_id", "product_id"
     ).annotate(total=Sum("quantity"))
     result = {}

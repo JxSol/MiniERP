@@ -3,6 +3,8 @@
 упаковка, перемещение, инвентаризация), остатки по вкладкам и движения по складу.
 """
 
+from decimal import Decimal
+
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin import SimpleListFilter
@@ -46,9 +48,15 @@ from .models import (
 )
 
 ITEM_FIELDS = ("material", "part", "part_material", "variant", "product")
+ZERO = Decimal(0)
 
 
 fmt_qty = fmt_quantity
+
+
+def _label(text: str, kind: str = "info") -> str:
+    """Цветная метка unfold (как в списках) для readonly-полей и колонок."""
+    return mark_safe(render_to_string("unfold/helpers/label.html", {"type": kind, "text": text}))
 
 
 def _doc_link(move: StockMove) -> str:
@@ -64,10 +72,10 @@ def _doc_link(move: StockMove) -> str:
 
 @admin.register(Warehouse)
 class WarehouseAdmin(ArchiveAdmin):
-    list_display = ("name", "is_default", "order", "is_active")
+    list_display = ("name", "is_default", "is_showcase", "order", "is_active")
     list_editable = ("order",)
     search_fields = ("name",)
-    fields = ("name", "is_default", "order", "is_active", "notes")
+    fields = ("name", "is_default", "is_showcase", "order", "is_active", "notes")
 
 
 # --- Общее для документов -------------------------------------------------------------
@@ -106,12 +114,7 @@ class DocumentAdmin(PageHelpMixin, HistoryAdmin, ModelAdmin):
     @display(description="Статус")
     def status_display(self, obj):
         """Для карточки: в readonly-поле кортеж из status_badge не превращается в метку."""
-        return mark_safe(
-            render_to_string(
-                "unfold/helpers/label.html",
-                {"type": STATUS_COLORS.get(obj.status, "info"), "text": obj.get_status_display()},
-            )
-        )
+        return _label(obj.get_status_display(), STATUS_COLORS.get(obj.status, "info"))
 
     def has_change_permission(self, request, obj=None):
         if obj is not None and not isinstance(obj, str) and obj.is_cancelled:
@@ -599,7 +602,7 @@ class KindTabChangeList(ChangeList):
 class StockBalanceAdmin(ReadOnlyAdmin):
     """Остатки по вкладкам: материалы, детали, изделия, товары."""
 
-    list_display = ("item_display", "warehouse", "quantity_display", "total_display")
+    list_display = ("item_display", "warehouse_display", "quantity_display", "total_display")
     list_filter = ("warehouse",)
     search_fields = (
         "material__name",
@@ -617,9 +620,14 @@ class StockBalanceAdmin(ReadOnlyAdmin):
         return KindTabChangeList
 
     def get_list_display(self, request):
+        columns = ["item_display", "warehouse_display", "quantity_display"]
+        if reports.has_showcase():
+            columns += ["available_display", "showcase_display"]
+        else:
+            columns.append("total_display")
         if balance_kind(request) == ItemKind.MATERIAL.value:
-            return (*self.list_display, "min_display")
-        return self.list_display
+            columns.append("min_display")
+        return columns
 
     def get_list_filter(self, request):
         if balance_kind(request) == ItemKind.MATERIAL.value:
@@ -627,7 +635,9 @@ class StockBalanceAdmin(ReadOnlyAdmin):
         return ("warehouse",)
 
     def get_queryset(self, request):
-        self._totals = reports.totals_by_item()
+        # «Доступно» — без витрин; образцы на витринах считаются отдельно
+        self._totals = reports.totals_by_item(showcase=False)
+        self._showcase = reports.totals_by_item(showcase=True)
         return (
             super()
             .get_queryset(request)
@@ -645,6 +655,12 @@ class StockBalanceAdmin(ReadOnlyAdmin):
     def item_display(self, obj):
         return obj.item_label
 
+    @display(description="Склад", ordering="warehouse__name")
+    def warehouse_display(self, obj):
+        if obj.warehouse.is_showcase:
+            return format_html("{} {}", obj.warehouse.name, _label("витрина"))
+        return obj.warehouse.name
+
     @display(description="На складе", ordering="quantity")
     def quantity_display(self, obj):
         return fmt_qty(obj.quantity, obj.unit_label)
@@ -652,6 +668,14 @@ class StockBalanceAdmin(ReadOnlyAdmin):
     @display(description="На всех складах")
     def total_display(self, obj):
         return fmt_qty(getattr(self, "_totals", {}).get(obj.item_key), obj.unit_label)
+
+    @display(description="Доступно, все склады")
+    def available_display(self, obj):
+        return fmt_qty(getattr(self, "_totals", {}).get(obj.item_key, ZERO), obj.unit_label)
+
+    @display(description="На витрине")
+    def showcase_display(self, obj):
+        return fmt_qty(getattr(self, "_showcase", {}).get(obj.item_key), obj.unit_label)
 
     @display(description="Минимум")
     def min_display(self, obj):

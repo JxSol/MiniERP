@@ -174,3 +174,12 @@ def test_adjustment_tabs_and_reason_choices(client, admin_user, demo):
     assert "Начальные остатки" not in add_writeoff
     add_receiving = client.get(reverse("admin:stock_receiving_add")).content.decode()
     assert "Начальные остатки" in add_receiving and "Образцы и подарки" not in add_receiving
+
+
+def test_showcase_columns_in_balances(client, admin_user, demo):
+    client.force_login(admin_user)
+    page = client.get(reverse("admin:stock_stockbalance_changelist") + "?kind=variant")
+    columns = page.context_data["cl"].list_display
+    assert "available_display" in columns and "showcase_display" in columns
+    html = page.content.decode()
+    assert "На витрине" in html and "Магазин — витрина" in html
