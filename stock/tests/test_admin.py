@@ -117,7 +117,7 @@ def test_receipt_and_run_posted_from_admin_forms(client, demo):
     assert run.status == DocumentStatus.CANCELLED
     assert balance_of(wh.pk, (ItemKind.MATERIAL, white.pk, None)) == D(2000)
     balances = client.get(reverse("admin:stock_stockbalance_changelist")).content.decode()
-    assert "2 000 г" in balances
+    assert "2 кг" in balances
 
 
 def test_seller_has_no_stock_access(client, demo):

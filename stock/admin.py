@@ -3,8 +3,6 @@
 пересчитали), остатки и журнал движений.
 """
 
-from decimal import Decimal
-
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin import SimpleListFilter
@@ -16,7 +14,7 @@ from unfold.decorators import action, display
 from unfold.widgets import UnfoldAdminSelectWidget
 
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
-from core.admin_utils import PageHelpMixin, fmt_number, hx_redirect
+from core.admin_utils import PageHelpMixin, fmt_number, fmt_quantity, hx_redirect
 from core.forms import ActiveChoicesForm
 
 from . import reports
@@ -41,12 +39,7 @@ from .models import (
 ITEM_FIELDS = ("material", "part", "part_material", "variant", "product")
 
 
-def fmt_qty(value, unit="шт") -> str:
-    """2000 → «2 000 г», 12.5 → «12,5 шт»."""
-    if value is None:
-        return "—"
-    text = f"{Decimal(value).normalize():,f}".replace(",", " ").replace(".", ",")
-    return f"{text} {unit}"
+fmt_qty = fmt_quantity
 
 
 def _doc_link(move: StockMove) -> str:

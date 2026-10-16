@@ -127,7 +127,13 @@ class Part(UniqueNameModel):
         "Расход материала на партию",
         help_text="Как показывает слайсер или программа лазера — на весь стол или лист.",
     )
-    batch_minutes = _minutes_field("Время на партию, мин")
+    batch_minutes = models.DecimalField(
+        "Время на партию",
+        max_digits=10,
+        decimal_places=4,
+        validators=[MinValueValidator(Decimal("0.01"))],
+        help_text="Хранится в минутах; вводится как дни, часы, минуты, секунды.",
+    )
     batch_size = models.PositiveIntegerField(
         "Штук в партии",
         default=1,

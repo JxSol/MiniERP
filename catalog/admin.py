@@ -8,7 +8,7 @@ from unfold.decorators import display
 from unfold.widgets import UnfoldAdminColorInputWidget
 
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
-from core.admin_utils import color_swatch, fmt_money, fmt_number, fmt_price
+from core.admin_utils import color_swatch, fmt_money, fmt_number, fmt_price, fmt_quantity
 
 from .models import (
     Color,
@@ -225,7 +225,7 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
             (
                 (
                     " · ".join(str(x) for x in (o.manufacturer, o.supplier) if x) or "—",
-                    f"{fmt_number(o.pack_size)} {obj.get_unit_display()} "
+                    f"{fmt_quantity(o.pack_size, obj.get_unit_display())} "
                     f"за {fmt_money(o.pack_price, 0)}",
                 )
                 for o in offers

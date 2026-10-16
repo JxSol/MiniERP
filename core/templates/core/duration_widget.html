@@ -1,0 +1,10 @@
+{% spaceless %}
+<div class="duration-widget flex flex-row flex-wrap gap-3 items-center">
+    {% for widget in widget.subwidgets %}
+        <label class="flex flex-row items-center gap-1.5">
+            {% include widget.template_name %}
+            <span class="text-base-500 dark:text-base-400 text-sm">{{ widget.unit }}</span>
+        </label>
+    {% endfor %}
+</div>
+{% endspaceless %}

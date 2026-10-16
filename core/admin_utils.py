@@ -43,6 +43,22 @@ def fmt_price(value: Decimal | None) -> str:
     return fmt_money(quantized, digits)
 
 
+def fmt_quantity(value: Decimal | None, unit: str = "шт") -> str:
+    """
+    Количество с единицей: 2200 г → «2,2 кг», 1500 мл → «1,5 л», 12.5 шт → «12,5 шт».
+    Разряды разделяются неразрывным пробелом.
+    """
+    if value is None:
+        return "—"
+    value = Decimal(value)
+    if unit == "г" and abs(value) >= 1000:
+        value, unit = (value / 1000).quantize(Decimal("0.001")), "кг"
+    elif unit == "мл" and abs(value) >= 1000:
+        value, unit = (value / 1000).quantize(Decimal("0.001")), "л"
+    text = f"{value.normalize():,f}".replace(",", " ").replace(".", ",")
+    return f"{text} {unit}"
+
+
 def fmt_duration(minutes: Decimal | None) -> str:
     """480 → «8 ч», 90 → «1 ч 30 мин», 12.5 → «12,5 мин»."""
     if minutes is None:
@@ -120,7 +136,7 @@ def _qty(node) -> str:
         return ""
     if node.unit == "ч":
         return fmt_duration(node.quantity * 60)
-    return f"{fmt_number(node.quantity.quantize(Decimal('0.0001')))} {node.unit}"
+    return fmt_quantity(node.quantity.quantize(Decimal("0.0001")), node.unit)
 
 
 def _row(node, depth: int) -> str:

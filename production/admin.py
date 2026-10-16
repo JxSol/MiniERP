@@ -28,6 +28,7 @@ from core.admin_utils import (
     fmt_duration,
     fmt_money,
     fmt_number,
+    fmt_quantity,
     hx_redirect,
     render_cost_tree,
     safe_tree,
@@ -35,6 +36,7 @@ from core.admin_utils import (
 )
 from core.forms import ActiveChoicesForm
 from core.models import Size
+from core.widgets import DurationMinutesField
 from costing.services import model_tree, part_tree, variant_tree
 from gallery.admin import ModelPhotoInline, PartPhotoInline, PhotoUploaderMixin, VariantPhotoInline
 from gallery.models import main_photo
@@ -87,6 +89,17 @@ class CopyPartForm(BaseDialogForm):
     )
 
 
+class PartForm(ActiveChoicesForm):
+    batch_minutes = DurationMinutesField(
+        label="Время на партию",
+        help_text="Сколько идёт один стол или один лист — как показывает слайсер или программа лазера.",
+    )
+
+    class Meta:
+        model = Part
+        fields = "__all__"
+
+
 class PartOperationInline(LineInline):
     model = PartOperation
     fields = ("operation_type", "minutes", "rate")
@@ -95,6 +108,7 @@ class PartOperationInline(LineInline):
 
 @admin.register(Part)
 class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAdmin):
+    form = PartForm
     list_display = (
         "name",
         "code",
@@ -142,8 +156,8 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
             return "Посчитается после сохранения"
         minutes = obj.batch_minutes / obj.batch_size
         return (
-            f"{fmt_number(obj.material_per_piece.quantize(obj.batch_material_qty))} "
-            f"{obj.material.get_unit_display()}, {fmt_duration(minutes)}"
+            f"{fmt_quantity(obj.material_per_piece.quantize(Decimal('0.01')), obj.material.get_unit_display())}, "
+            f"{fmt_duration(minutes)}"
         )
 
     @display(description="% брака (итоговый)")

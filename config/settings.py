@@ -131,6 +131,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Оформление админки
 
+from django.templatetags.static import static  # noqa: E402
 from django.urls import reverse_lazy  # noqa: E402
 
 
@@ -148,6 +149,7 @@ UNFOLD = {
     "SITE_HEADER": "Мини-ERP",
     "SITE_SYMBOL": "precision_manufacturing",
     "SHOW_HISTORY": True,
+    "STYLES": [lambda request: static("core/admin.css")],
     # Глобальный поиск по артикулу, названию, штрихкоду (Ctrl+K)
     "COMMAND": {"search_models": True, "show_history": True},
     "SIDEBAR": {
