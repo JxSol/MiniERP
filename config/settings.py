@@ -189,6 +189,12 @@ UNFOLD = {
                         "Закупки", "shopping_cart", "admin:stock_receipt_changelist", "view_receipt"
                     ),
                     _item(
+                        "Приход и списание",
+                        "swap_vert",
+                        "admin:stock_receiving_changelist",
+                        "view_receiving",
+                    ),
+                    _item(
                         "Перемещения",
                         "local_shipping",
                         "admin:stock_transfer_changelist",
@@ -284,6 +290,12 @@ UNFOLD = {
                     _item(
                         "Склады", "warehouse", "admin:stock_warehouse_changelist", "view_warehouse"
                     ),
+                    _item(
+                        "Причины прихода и списания",
+                        "rule",
+                        "admin:stock_stockreason_changelist",
+                        "view_stockreason",
+                    ),
                     _item("Метки", "label", "admin:core_tag_changelist", "view_tag"),
                     _item("Размеры", "straighten", "admin:core_size_changelist", "view_size"),
                 ],
@@ -321,6 +333,13 @@ UNFOLD = {
                 _tab("Выпуск деталей", "admin:stock_productionrun_changelist", "view_run"),
                 _tab("Сборка изделий", "admin:stock_assembly_changelist", "view_assembly"),
                 _tab("Упаковка товаров", "admin:stock_packing_changelist", "view_packing"),
+            ],
+        },
+        {
+            "models": ["stock.receiving", "stock.writeoff"],
+            "items": [
+                _tab("Оприходование", "admin:stock_receiving_changelist", "view_receiving"),
+                _tab("Списание", "admin:stock_writeoff_changelist", "view_writeoff"),
             ],
         },
     ],

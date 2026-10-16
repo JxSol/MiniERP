@@ -32,6 +32,7 @@ REFERENCE_MODELS = [
     "catalog.materialpricehistory",
     "production.productcategory",
     "stock.warehouse",
+    "stock.stockreason",
     "stock.stockbalance",
     "stock.stockmove",
 ]
@@ -49,6 +50,8 @@ WORK_MODELS = [
     "stock.packing",
     "stock.transfer",
     "stock.inventory",
+    "stock.receiving",
+    "stock.writeoff",
 ]
 
 # Строки внутри основных записей: можно и удалять (убрать деталь из модели и т. п.)
@@ -66,6 +69,8 @@ LINE_MODELS = [
     "stock.receiptline",
     "stock.transferline",
     "stock.inventoryline",
+    "stock.receivingline",
+    "stock.writeoffline",
 ]
 
 

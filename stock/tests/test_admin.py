@@ -15,7 +15,18 @@ from stock.models import DocumentStatus, ItemKind, ProductionRun, Receipt, Wareh
 
 pytestmark = pytest.mark.django_db
 
-MODELS = ["receipt", "productionrun", "assembly", "packing", "transfer", "inventory", "warehouse"]
+MODELS = [
+    "receipt",
+    "productionrun",
+    "assembly",
+    "packing",
+    "transfer",
+    "inventory",
+    "receiving",
+    "writeoff",
+    "warehouse",
+    "stockreason",
+]
 
 
 @pytest.fixture
@@ -151,3 +162,15 @@ def test_production_journal_tabs(client, admin_user, demo):
         html = client.get(reverse(f"admin:stock_{name}_changelist")).content.decode()
         for title in ("Выпуск деталей", "Сборка изделий", "Упаковка товаров"):
             assert title in html, (name, title)
+
+
+def test_adjustment_tabs_and_reason_choices(client, admin_user, demo):
+    client.force_login(admin_user)
+    for name in ("receiving", "writeoff"):
+        html = client.get(reverse(f"admin:stock_{name}_changelist")).content.decode()
+        assert "Оприходование" in html and "Списание" in html, name
+    add_writeoff = client.get(reverse("admin:stock_writeoff_add")).content.decode()
+    assert "Образцы и подарки" in add_writeoff and "Прочее" in add_writeoff
+    assert "Начальные остатки" not in add_writeoff
+    add_receiving = client.get(reverse("admin:stock_receiving_add")).content.decode()
+    assert "Начальные остатки" in add_receiving and "Образцы и подарки" not in add_receiving

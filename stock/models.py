@@ -843,7 +843,144 @@ class InventoryLine(StockItemMixin):
         self.clean_item()
 
 
-DOCUMENT_MODELS = (Receipt, ProductionRun, Assembly, Packing, Transfer, Inventory)
+# --- Оприходование и списание ------------------------------------------------------
+
+
+class ReasonDirection(models.TextChoices):
+    IN = "in", "Оприходование"
+    OUT = "out", "Списание"
+    BOTH = "both", "Оприходование и списание"
+
+
+class StockReason(UniqueNameModel):
+    """Причина оприходования или списания — справочник, пользователи выбирают из готового."""
+
+    direction = models.CharField(
+        "Где используется",
+        max_length=5,
+        choices=ReasonDirection.choices,
+        default=ReasonDirection.BOTH,
+    )
+    order = models.PositiveIntegerField("Порядок", default=0)
+
+    class Meta:
+        verbose_name = "Причина прихода / списания"
+        verbose_name_plural = "Причины прихода и списания"
+        ordering = ["order", "name"]
+        constraints = [
+            models.UniqueConstraint(fields=["name_key"], name="stock_stockreason_name_uniq")
+        ]
+
+    @classmethod
+    def for_direction(cls, direction: str):
+        return cls.objects.filter(direction__in=[direction, ReasonDirection.BOTH])
+
+
+class AdjustmentDocument(StockDocument):
+    """
+    Общее для оприходования и списания: причина из справочника и позиции любого уровня.
+    Приход — начальные остатки, покупка готовых деталей, возврат; списание — брак на складе,
+    образцы, порча. Закупки материалов и производство здесь не оформляются.
+    """
+
+    direction = ""  # ReasonDirection.IN или OUT — задаётся в наследниках
+    sign = 1
+
+    reason = models.ForeignKey(
+        StockReason,
+        verbose_name="Причина",
+        on_delete=models.PROTECT,
+        related_name="+",
+        help_text="Из справочника «Причины прихода и списания».",
+    )
+
+    class Meta(StockDocument.Meta):
+        abstract = True
+
+    def clean(self):
+        super().clean()
+        if self.reason_id and self.reason.direction not in (self.direction, ReasonDirection.BOTH):
+            raise ValidationError(
+                {
+                    "reason": f"Причина «{self.reason}» не подходит для документа «{self._meta.verbose_name}»."
+                }
+            )
+
+    def build_moves(self):
+        return [
+            (self.warehouse_id, line.item_key, self.sign * line.quantity)
+            for line in self.lines.all()
+        ]
+
+
+class Receiving(AdjustmentDocument):
+    """Оприходование: позиции появляются на складе без закупки и производства."""
+
+    number_prefix = "RCV"
+    direction = ReasonDirection.IN
+    sign = 1
+    history = HistoricalRecords()
+
+    class Meta(StockDocument.Meta):
+        verbose_name = "Оприходование"
+        verbose_name_plural = "Оприходования"
+
+
+class WriteOff(AdjustmentDocument):
+    """Списание: позиции уходят со склада не в производство и не в продажу."""
+
+    number_prefix = "WRO"
+    direction = ReasonDirection.OUT
+    sign = -1
+    history = HistoricalRecords()
+
+    class Meta(StockDocument.Meta):
+        verbose_name = "Списание"
+        verbose_name_plural = "Списания"
+
+
+class AdjustmentLine(StockItemMixin):
+    quantity = positive_decimal_field("Сколько")
+
+    class Meta:
+        abstract = True
+
+    def __str__(self):
+        return f"{self.item_label} × {self.quantity}"
+
+    def clean(self):
+        super().clean()
+        self.clean_item()
+
+
+class ReceivingLine(AdjustmentLine):
+    document = models.ForeignKey(Receiving, on_delete=models.CASCADE, related_name="lines")
+
+    class Meta:
+        verbose_name = "Строка оприходования"
+        verbose_name_plural = "Позиции оприходования"
+        constraints = [_item_constraint("stock_receivingline_single_item")]
+
+
+class WriteOffLine(AdjustmentLine):
+    document = models.ForeignKey(WriteOff, on_delete=models.CASCADE, related_name="lines")
+
+    class Meta:
+        verbose_name = "Строка списания"
+        verbose_name_plural = "Позиции списания"
+        constraints = [_item_constraint("stock_writeoffline_single_item")]
+
+
+DOCUMENT_MODELS = (
+    Receipt,
+    ProductionRun,
+    Assembly,
+    Packing,
+    Transfer,
+    Inventory,
+    Receiving,
+    WriteOff,
+)
 
 
 def material_kind_ok(material: Material) -> bool:

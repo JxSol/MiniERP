@@ -7,8 +7,10 @@ from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin import SimpleListFilter
 from django.shortcuts import get_object_or_404
+from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils.html import format_html
+from django.utils.safestring import mark_safe
 from unfold.admin import ModelAdmin
 from unfold.decorators import action, display
 from unfold.views import ChangeList
@@ -27,14 +29,20 @@ from .models import (
     ItemKind,
     Packing,
     ProductionRun,
+    ReasonDirection,
     Receipt,
     ReceiptLine,
+    Receiving,
+    ReceivingLine,
     Shortage,
     StockBalance,
     StockMove,
+    StockReason,
     Transfer,
     TransferLine,
     Warehouse,
+    WriteOff,
+    WriteOffLine,
 )
 
 ITEM_FIELDS = ("material", "part", "part_material", "variant", "product")
@@ -74,26 +82,36 @@ class DocumentForm(ActiveChoicesForm):
                 self.fields["warehouse"].initial = default.pk
 
 
+STATUS_COLORS = {
+    DocumentStatus.DRAFT: "warning",
+    DocumentStatus.POSTED: "success",
+    DocumentStatus.CANCELLED: "danger",
+}
+
+
 class DocumentAdmin(PageHelpMixin, HistoryAdmin, ModelAdmin):
     """Документ проводится при сохранении; отменить можно кнопкой вверху."""
 
     form = DocumentForm
     list_filter = ("status", "warehouse")
-    readonly_fields = ("number", "status_badge", "posted_at", "created_by")
+    readonly_fields = ("number", "status_badge", "status_display", "posted_at", "created_by")
     actions_detail = ("cancel_document",)
     warn_unsaved_form = True
     list_filter_submit = False
 
-    @display(
-        description="Статус",
-        label={
-            DocumentStatus.DRAFT: "warning",
-            DocumentStatus.POSTED: "success",
-            DocumentStatus.CANCELLED: "danger",
-        },
-    )
+    @display(description="Статус", label=STATUS_COLORS)
     def status_badge(self, obj):
         return obj.status, obj.get_status_display()
+
+    @display(description="Статус")
+    def status_display(self, obj):
+        """Для карточки: в readonly-поле кортеж из status_badge не превращается в метку."""
+        return mark_safe(
+            render_to_string(
+                "unfold/helpers/label.html",
+                {"type": STATUS_COLORS.get(obj.status, "info"), "text": obj.get_status_display()},
+            )
+        )
 
     def has_change_permission(self, request, obj=None):
         if obj is not None and not isinstance(obj, str) and obj.is_cancelled:
@@ -211,7 +229,7 @@ class ReceiptAdmin(DocumentAdmin):
     list_display = ("number", "date", "warehouse", "lines_display", "status_badge", "created_by")
     search_fields = ("number", "lines__material__name")
     inlines = (ReceiptLineInline,)
-    fields = ("number", "date", "warehouse", "status_badge", "notes", "created_by", "posted_at")
+    fields = ("number", "date", "warehouse", "status_display", "notes", "created_by", "posted_at")
 
     @display(description="Позиции")
     def lines_display(self, obj):
@@ -279,7 +297,7 @@ class ProductionRunAdmin(DocumentAdmin):
         "material",
         "equipment",
         ("good_qty", "scrap_qty"),
-        "status_badge",
+        "status_display",
         "notes",
         "created_by",
         "posted_at",
@@ -301,7 +319,7 @@ class AssemblyAdmin(DocumentAdmin):
         "warehouse",
         "variant",
         "quantity",
-        "status_badge",
+        "status_display",
         "notes",
         "created_by",
         "posted_at",
@@ -320,7 +338,7 @@ class PackingAdmin(DocumentAdmin):
         "warehouse",
         "product",
         "quantity",
-        "status_badge",
+        "status_display",
         "notes",
         "created_by",
         "posted_at",
@@ -373,7 +391,7 @@ class TransferAdmin(DocumentAdmin):
         "number",
         "date",
         ("warehouse", "to_warehouse"),
-        "status_badge",
+        "status_display",
         "notes",
         "created_by",
         "posted_at",
@@ -390,11 +408,110 @@ class InventoryAdmin(DocumentAdmin):
     list_display = ("number", "date", "warehouse", "lines_count", "status_badge", "created_by")
     inlines = (InventoryLineInline,)
     search_fields = ("number",)
-    fields = ("number", "date", "warehouse", "status_badge", "notes", "created_by", "posted_at")
+    fields = ("number", "date", "warehouse", "status_display", "notes", "created_by", "posted_at")
 
     @display(description="Позиций")
     def lines_count(self, obj):
         return obj.lines.count()
+
+
+# --- Оприходование и списание ------------------------------------------------------
+
+
+@admin.register(StockReason)
+class StockReasonAdmin(ArchiveAdmin):
+    list_display = ("name", "direction", "order", "is_active")
+    list_editable = ("order",)
+    list_filter = ("direction",)
+    search_fields = ("name",)
+    fields = ("name", "direction", "order", "is_active", "notes")
+
+
+class AdjustmentForm(DocumentForm):
+    """Причины — только подходящие этому документу: приход, списание или «для обоих»."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["reason"].queryset = self.fields["reason"].queryset.filter(
+            direction__in=[self._meta.model.direction, ReasonDirection.BOTH]
+        )
+
+
+class ReceivingLineInline(LineInline):
+    model = ReceivingLine
+    form = ItemLineForm
+    autocomplete_fields = ITEM_FIELDS
+    fields = (*ITEM_FIELDS, "quantity")
+    min_num = 1
+    verbose_name_plural = "Позиции"
+
+
+class WriteOffLineInline(ReceivingLineInline):
+    model = WriteOffLine
+
+
+class AdjustmentAdmin(DocumentAdmin):
+    form = AdjustmentForm
+    list_display = (
+        "number",
+        "date",
+        "warehouse",
+        "reason",
+        "lines_display",
+        "status_badge",
+        "created_by",
+    )
+    list_filter = ("status", "warehouse", "reason")
+    search_fields = (
+        "number",
+        "lines__material__name",
+        "lines__part__name",
+        "lines__variant__name",
+        "lines__variant__model__name",
+        "lines__product__name",
+        "lines__product__sku",
+    )
+    fields = (
+        "number",
+        "date",
+        "warehouse",
+        "reason",
+        "status_display",
+        "notes",
+        "created_by",
+        "posted_at",
+    )
+
+    def get_queryset(self, request):
+        return (
+            super()
+            .get_queryset(request)
+            .select_related("warehouse", "reason", "created_by")
+            .prefetch_related(
+                "lines__material__color",
+                "lines__part",
+                "lines__part_material__color",
+                "lines__variant__model",
+                "lines__product",
+            )
+        )
+
+    @display(description="Позиции")
+    def lines_display(self, obj):
+        return "; ".join(
+            f"{line.item_label} × {fmt_qty(line.quantity, line.unit_label)}"
+            for line in obj.lines.all()
+        )
+
+
+@admin.register(Receiving)
+class ReceivingAdmin(AdjustmentAdmin):
+    inlines = (ReceivingLineInline,)
+
+
+@admin.register(WriteOff)
+class WriteOffAdmin(AdjustmentAdmin):
+    inlines = (WriteOffLineInline,)
 
 
 # --- Остатки и движения ------------------------------------------------------------

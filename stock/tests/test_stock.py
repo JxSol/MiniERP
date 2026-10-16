@@ -17,12 +17,18 @@ from stock.models import (
     ItemKind,
     Packing,
     ProductionRun,
+    ReasonDirection,
     Receipt,
     ReceiptLine,
+    Receiving,
+    ReceivingLine,
     Shortage,
+    StockReason,
     Transfer,
     TransferLine,
     Warehouse,
+    WriteOff,
+    WriteOffLine,
     balance_of,
     total_of,
 )
@@ -272,3 +278,51 @@ def test_item_validation(demo):
     with pytest.raises(ValidationError, match="укажите материал"):
         InventoryLine(inventory=inv, part=shade, counted_qty=D(1)).full_clean()
     assert Equipment.objects.count() == 2
+
+
+def test_receiving_and_writeoff(demo):
+    """Оприходование кладёт позиции на склад, списание снимает; в минус нельзя."""
+    wh = demo["wh"]
+    part = Part.objects.get(name="Плафон Луна")
+    white = mat("PLA Basic", "Белый")
+    key = (ItemKind.PART.value, part.pk, white.pk)
+
+    receiving = Receiving.objects.create(
+        warehouse=wh, reason=StockReason.objects.get(name="Начальные остатки")
+    )
+    ReceivingLine.objects.create(document=receiving, part=part, part_material=white, quantity=D(5))
+    receiving.post()
+    assert receiving.status == DocumentStatus.POSTED
+    assert receiving.number.startswith("RCV-")
+    assert balance_of(wh.pk, key) == D(5)
+
+    writeoff = WriteOff.objects.create(
+        warehouse=wh, reason=StockReason.objects.get(name="Образцы и подарки")
+    )
+    WriteOffLine.objects.create(document=writeoff, part=part, part_material=white, quantity=D(3))
+    writeoff.post()
+    assert writeoff.number.startswith("WRO-")
+    assert balance_of(wh.pk, key) == D(2)
+
+    too_much = WriteOff.objects.create(warehouse=wh, reason=StockReason.objects.get(name="Прочее"))
+    WriteOffLine.objects.create(document=too_much, part=part, part_material=white, quantity=D(10))
+    with pytest.raises(Shortage):
+        too_much.post()
+    assert balance_of(wh.pk, key) == D(2)
+
+    with pytest.raises(Shortage):
+        receiving.cancel()  # после списания 3 из 5 отмена прихода увела бы остаток в минус
+    writeoff.cancel()
+    receiving.cancel()
+    assert balance_of(wh.pk, key) == D(0)
+
+
+def test_reason_must_match_direction(demo):
+    doc = WriteOff(warehouse=demo["wh"], reason=StockReason.objects.get(name="Начальные остатки"))
+    with pytest.raises(ValidationError, match="не подходит"):
+        doc.full_clean()
+    for_writeoff = set(
+        StockReason.for_direction(ReasonDirection.OUT).values_list("name", flat=True)
+    )
+    assert {"Образцы и подарки", "Прочее"} <= for_writeoff
+    assert "Начальные остатки" not in for_writeoff
