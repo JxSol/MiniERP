@@ -13,6 +13,7 @@ from catalog.models import (
     Manufacturer,
     Material,
     MaterialCategory,
+    MaterialForm,
     MaterialOffer,
     OperationType,
     Supplier,
@@ -40,19 +41,41 @@ def _op(name: str) -> OperationType:
     return OperationType.objects.get(name=name)
 
 
-def _material(name, category, unit, pack_size, pack_price, *, color=None, maker=None, shop=None):
-    """Материал с одним актуальным предложением поставщика."""
-    material = Material.objects.create(
+def _material(
+    name,
+    category,
+    unit,
+    pack_size,
+    pack_price,
+    *,
+    color=None,
+    maker=None,
+    shop=None,
+    form_type=MaterialForm.PLAIN,
+    width=None,
+    length=None,
+    height=None,
+    roll_length=None,
+):
+    """Материал с одним актуальным предложением поставщика. Для рулона pack_size=None."""
+    material = Material(
         name=name,
         category=_category(category),
         unit=unit,
         color=Color.objects.get(name=color) if color else None,
+        form_type=form_type,
+        width_cm=D(width) if width else None,
+        length_cm=D(length) if length else None,
+        height_cm=D(height) if height else None,
+        roll_length_m=D(roll_length) if roll_length else None,
     )
+    material.full_clean(exclude=["name_key"])
+    material.save()
     MaterialOffer.objects.create(
         material=material,
         manufacturer=Manufacturer.objects.filter(name=maker).first() if maker else None,
         supplier=Supplier.objects.filter(name=shop).first() if shop else None,
-        pack_size=D(pack_size),
+        pack_size=D(pack_size) if pack_size is not None else material.roll_area_m2,
         pack_price=D(pack_price),
     )
     return material
@@ -88,13 +111,53 @@ def load_demo() -> dict:
     silk_gold = _material(
         "PLA Silk", "PLA", Unit.GRAM, 1000, 12000, color="Золотой", maker="Bambu Lab", shop="Kaspi"
     )
-    plywood = _material("Фанера 4 мм", "Фанера", Unit.SHEET, 1, 2400, shop="Местный магазин")
+    plywood = _material(
+        "Фанера 4 мм",
+        "Фанера",
+        Unit.SHEET,
+        1,
+        2400,
+        shop="Местный магазин",
+        form_type=MaterialForm.SHEET,
+        width=152.5,
+        length=152.5,
+    )
     cord = _material("Шнур с выключателем", "Электрика", Unit.PIECE, 10, 15000, shop="AliExpress")
     socket = _material("Патрон E27", "Электрика", Unit.PIECE, 1, 400, shop="Местный магазин")
     screw = _material("Винт M3", "Крепёж", Unit.PIECE, 100, 1500, shop="AliExpress")
-    box = _material("Коробка 20×20×25", "Фирменная", Unit.PIECE, 1, 300)
-    small_box = _material("Коробочка 8×8×8", "Фирменная", Unit.PIECE, 1, 120)
-    big_box = _material("Коробка 40×30×30", "Фирменная", Unit.PIECE, 1, 900)
+    piece = {"form_type": MaterialForm.PIECE}
+    box = _material(
+        "Коробка 20×20×25", "Фирменная", Unit.PIECE, 1, 300, width=20, length=20, height=25, **piece
+    )
+    small_box = _material(
+        "Коробочка 8×8×8", "Фирменная", Unit.PIECE, 1, 120, width=8, length=8, height=8, **piece
+    )
+    big_box = _material(
+        "Коробка 40×30×30", "Фирменная", Unit.PIECE, 1, 900, width=40, length=30, height=30, **piece
+    )
+    # рулон: 1 рулон = 1,2 м × 100 м = 120 м² за 6 000 ₸ → 50 ₸/м², 60 ₸/пог. м
+    _material(
+        "ВПП плёнка 120 см",
+        "Транспортная",
+        Unit.SQ_METER,
+        None,
+        6000,
+        shop="Местный магазин",
+        form_type=MaterialForm.ROLL,
+        width=120,
+        roll_length=100,
+    )
+    # листы: пачка 10 листов 58×58 см за 600 ₸ → 60 ₸/лист, 178,36 ₸/м²
+    _material(
+        "Плёнка упаковочная 58×58 см",
+        "Фирменная",
+        Unit.SHEET,
+        10,
+        600,
+        form_type=MaterialForm.SHEET,
+        width=58,
+        length=58,
+    )
 
     printer = Equipment.objects.create(
         name="Bambu P1S",
@@ -221,6 +284,17 @@ def load_demo_stock() -> None:
         ("PLA Silk", "Золотой", 1),
     ):
         material = Material.objects.get(name=name, color__name=color)
+        offer = material.offers.get()
+        ReceiptLine.objects.create(
+            receipt=receipt,
+            material=material,
+            offer=offer,
+            packs=D(packs),
+            pack_size=offer.pack_size,
+            pack_price=offer.pack_price,
+        )
+    for name, packs in (("ВПП плёнка 120 см", 5), ("Плёнка упаковочная 58×58 см", 1)):
+        material = Material.objects.get(name=name)
         offer = material.offers.get()
         ReceiptLine.objects.create(
             receipt=receipt,

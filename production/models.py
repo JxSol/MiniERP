@@ -12,11 +12,13 @@ from simple_history.models import HistoricalRecords
 from catalog.models import (
     COMPONENT_KINDS,
     PRODUCTION_KINDS,
+    EnteredUnitMixin,
     Equipment,
     Material,
     MaterialKind,
     OperationLevel,
     OperationType,
+    QtyUnit,
     Unit,
 )
 from core.models import (
@@ -127,6 +129,14 @@ class Part(UniqueNameModel):
     batch_material_qty = positive_decimal_field(
         "Расход материала на партию",
         help_text="Как показывает слайсер или программа лазера — на весь стол или лист.",
+    )
+    batch_material_unit = models.CharField(
+        "Единица расхода",
+        max_length=4,
+        choices=QtyUnit.choices,
+        blank=True,
+        default="",
+        help_text="Пусто — единица материала. Для листового материала расход можно указать в м².",
     )
     batch_minutes = models.DecimalField(
         "Время на партию",
@@ -418,7 +428,7 @@ class ModelPart(models.Model):
         super().save(*args, **kwargs)
 
 
-class ModelComponent(models.Model):
+class ModelComponent(EnteredUnitMixin):
     model = models.ForeignKey(ProductModel, on_delete=models.CASCADE, related_name="components")
     material = models.ForeignKey(
         Material,
@@ -434,7 +444,7 @@ class ModelComponent(models.Model):
         verbose_name_plural = "Покупные комплектующие"
 
     def __str__(self):
-        return f"{self.material} × {self.quantity}"
+        return f"{self.material}: {self.quantity_display()}"
 
 
 class ModelOperation(models.Model):

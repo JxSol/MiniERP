@@ -11,7 +11,13 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from simple_history.models import HistoricalRecords
 
-from catalog.models import Material, MaterialKind, OperationLevel, OperationType
+from catalog.models import (
+    EnteredUnitMixin,
+    Material,
+    MaterialKind,
+    OperationLevel,
+    OperationType,
+)
 from core.models import (
     CodeField,
     Tag,
@@ -169,7 +175,7 @@ class ProductItem(models.Model):
         return f"{self.variant} × {self.quantity}"
 
 
-class ProductPackaging(models.Model):
+class ProductPackaging(EnteredUnitMixin):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="packaging")
     material = models.ForeignKey(
         Material,
@@ -178,14 +184,16 @@ class ProductPackaging(models.Model):
         related_name="product_packaging",
         limit_choices_to={"category__kind": MaterialKind.PACKAGING},
     )
-    quantity = positive_decimal_field("Кол-во", default=Decimal(1))
+    quantity = positive_decimal_field(
+        "Кол-во", default=Decimal(1), help_text="В единице материала или в единице ввода."
+    )
 
     class Meta:
         verbose_name = "Упаковка товара"
         verbose_name_plural = "Упаковка товара"
 
     def __str__(self):
-        return f"{self.material} × {self.quantity}"
+        return f"{self.material}: {self.quantity_display()}"
 
 
 class ProductOperation(models.Model):

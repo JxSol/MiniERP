@@ -9,8 +9,10 @@ from unfold.widgets import UnfoldAdminColorInputWidget
 
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
 from core.admin_utils import color_swatch, fmt_money, fmt_number, fmt_price, fmt_quantity
+from core.forms import ActiveChoicesForm
 
 from .models import (
+    FORM_UNITS,
     Color,
     Equipment,
     Manufacturer,
@@ -94,8 +96,53 @@ class SupplierAdmin(ArchiveAdmin):
 # --- Материалы ---------------------------------------------------------------------
 
 
+class MaterialAdminForm(ActiveChoicesForm):
+    """Единица расхода нужна только обычной форме: остальным её задаёт форма учёта."""
+
+    class Meta:
+        model = Material
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["unit"].required = False
+
+    def clean(self):
+        data = super().clean()
+        form_type = data.get("form_type")
+        if form_type in FORM_UNITS:
+            data["unit"] = FORM_UNITS[form_type]
+        elif not data.get("unit"):
+            self.add_error("unit", "Укажите единицу расхода.")
+        return data
+
+
+class MaterialOfferForm(ActiveChoicesForm):
+    """Для рулона упаковка = площадь рулона, подставляется из размеров материала."""
+
+    class Meta:
+        model = MaterialOffer
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["pack_size"].required = False
+
+    def clean(self):
+        data = super().clean()
+        if not data.get("pack_size"):
+            material = getattr(self.instance, "material", None)
+            roll_area = material.roll_area_m2 if material is not None else None
+            if roll_area:
+                data["pack_size"] = roll_area
+            else:
+                self.add_error("pack_size", "Укажите, сколько единиц расхода в упаковке.")
+        return data
+
+
 class MaterialOfferInline(LineInline):
     model = MaterialOffer
+    form = MaterialOfferForm
     autocomplete_fields = ("manufacturer", "supplier")
     fields = (
         "is_active",
@@ -113,7 +160,13 @@ class MaterialOfferInline(LineInline):
     def unit_price_display(self, obj):
         if not obj.pk:
             return "—"
-        return fmt_price(obj.unit_price)
+        return price_text(obj.material, obj.unit_price)
+
+
+def price_text(material, unit_price) -> str:
+    """«60 ₸/лист · 178,36 ₸/м²»."""
+    parts = material.price_breakdown(unit_price)
+    return " · ".join(f"{fmt_price(p)}/{u}" for p, u in parts) if parts else "—"
 
 
 class PriceHistoryInline(LineInline):
@@ -133,6 +186,15 @@ class PriceHistoryInline(LineInline):
 
 @admin.register(Material)
 class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
+    form = MaterialAdminForm
+    # Размеры показываются только для подходящей формы учёта (Alpine, без перезагрузки)
+    conditional_fields = {
+        "unit": "form_type === 'plain'",
+        "width_cm": "['piece', 'sheet', 'roll'].includes(form_type)",
+        "length_cm": "['piece', 'sheet'].includes(form_type)",
+        "height_cm": "form_type === 'piece'",
+        "roll_length_m": "form_type === 'roll'",
+    }
     list_display = (
         "swatch",
         "full_name_display",
@@ -146,7 +208,7 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
     search_fields = ("name", "color__name", "offers__manufacturer__name", "offers__supplier__name")
     autocomplete_fields = ("category", "color")
     inlines = (MaterialOfferInline, PriceHistoryInline)
-    readonly_fields = ("unit_price_display", "where_used")
+    readonly_fields = ("size_display", "unit_price_display", "where_used")
     fieldsets = (
         (
             "Данные",
@@ -156,8 +218,12 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
                     "name",
                     "color",
                     "category",
+                    "form_type",
                     "unit",
+                    ("width_cm", "length_cm", "height_cm", "roll_length_m"),
+                    "size_display",
                     "unit_price_display",
+                    "min_stock",
                     "is_active",
                     "notes",
                 ),
@@ -212,7 +278,31 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
                 "<span style='color:#b45309'>нет актуальных предложений — "
                 "себестоимость не считается</span>"
             )
-        return f"{fmt_price(price)} / {obj.get_unit_display()}"
+        return price_text(obj, price)
+
+    @display(description="Расчёт по размерам")
+    def size_display(self, obj):
+        """Площадь, объём, площадь рулона; пересчитывается на лету из полей формы (Alpine)."""
+        area = obj.sheet_area_m2 or Decimal(0)
+        volume = obj.piece_volume_m3 or Decimal(0)
+        roll = obj.roll_area_m2 or Decimal(0)
+        return format_html(
+            "<div x-show=\"form_type === 'sheet'\">Площадь листа: "
+            "<b x-text=\"(((+width_cm || 0) * (+length_cm || 0)) / 10000).toFixed(4).replace('.', ',')\">{}</b> м²</div>"
+            "<div x-show=\"form_type === 'piece'\">Объём: "
+            "<b x-text=\"(((+width_cm || 0) * (+length_cm || 0) * (+height_cm || 0)) / 1000000).toFixed(4).replace('.', ',')\">{}</b> м³ "
+            "(<b x-text=\"(((+width_cm || 0) * (+length_cm || 0) * (+height_cm || 0)) / 1000).toFixed(1).replace('.', ',')\">{}</b> л)</div>"
+            "<div x-show=\"form_type === 'roll'\">Рулон: "
+            "<b x-text=\"(((+width_cm || 0) / 100) * (+roll_length_m || 0)).toFixed(2).replace('.', ',')\">{}</b> м² "
+            "= <b x-text=\"(+roll_length_m || 0).toString().replace('.', ',')\">{}</b> пог. м</div>"
+            "<div x-show=\"form_type === 'plain' || form_type === 'length'\" class=\"text-base-500\">"
+            "Размеры не нужны</div>",
+            f"{area:.4f}".replace(".", ","),
+            f"{volume:.4f}".replace(".", ","),
+            f"{volume * 1000:.1f}".replace(".", ","),
+            f"{roll:.2f}".replace(".", ","),
+            f"{obj.roll_length_m or 0:f}".replace(".", ","),
+        )
 
     @display(description="Предложения")
     def offers_display(self, obj):

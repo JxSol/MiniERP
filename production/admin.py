@@ -35,7 +35,7 @@ from core.admin_utils import (
     safe_tree,
     thumbnail,
 )
-from core.forms import ActiveChoicesForm
+from core.forms import ActiveChoicesForm, QuantityUnitFormMixin
 from core.models import Size
 from core.widgets import DurationMinutesField
 from costing.services import model_tree, part_tree, variant_tree
@@ -90,7 +90,10 @@ class CopyPartForm(BaseDialogForm):
     )
 
 
-class PartForm(ActiveChoicesForm):
+class PartForm(QuantityUnitFormMixin, ActiveChoicesForm):
+    quantity_field = "batch_material_qty"
+    unit_field = "batch_material_unit"
+
     batch_minutes = DurationMinutesField(
         label="Время на партию",
         help_text="Сколько идёт один стол или один лист — как показывает слайсер или программа лазера.",
@@ -136,7 +139,8 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
                     "code",
                     "equipment",
                     "material",
-                    ("batch_material_qty", "batch_minutes", "batch_size"),
+                    ("batch_material_qty", "batch_material_unit", "batch_size"),
+                    "batch_minutes",
                     "per_piece_display",
                     ("scrap_percent", "scrap_display"),
                     "is_active",
@@ -255,10 +259,17 @@ class ModelPartInline(LineInline):
     verbose_name_plural = "Детали"
 
 
+class ModelComponentForm(QuantityUnitFormMixin, ActiveChoicesForm):
+    class Meta:
+        model = ModelComponent
+        fields = ("material", "quantity", "entered_unit")
+
+
 class ModelComponentInline(LineInline):
     model = ModelComponent
+    form = ModelComponentForm
     autocomplete_fields = ("material",)
-    fields = ("material", "quantity")
+    fields = ("material", "quantity", "entered_unit")
     verbose_name_plural = "Покупное"
 
 

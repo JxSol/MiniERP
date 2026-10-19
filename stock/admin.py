@@ -19,8 +19,8 @@ from unfold.views import ChangeList
 from unfold.widgets import UnfoldAdminSelectWidget
 
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
-from core.admin_utils import PageHelpMixin, fmt_number, fmt_quantity, hx_redirect
-from core.forms import ActiveChoicesForm
+from core.admin_utils import PageHelpMixin, fmt_number, fmt_price, fmt_quantity, hx_redirect
+from core.forms import ActiveChoicesForm, QuantityUnitFormMixin
 
 from . import reports
 from .models import (
@@ -188,10 +188,13 @@ class ReceiptLineForm(ActiveChoicesForm):
     def clean(self):
         data = super().clean()
         offer = data.get("offer")
+        material = data.get("material")
         if offer and not data.get("pack_size"):
             data["pack_size"] = offer.pack_size
         if offer and data.get("pack_price") is None:
             data["pack_price"] = offer.pack_price
+        if not data.get("pack_size") and material is not None and material.roll_area_m2:
+            data["pack_size"] = material.roll_area_m2  # рулон: упаковка = площадь рулона
         if not data.get("pack_size"):
             self.add_error(
                 "pack_size", "Укажите, сколько единиц в упаковке, или выберите предложение."
@@ -212,15 +215,23 @@ class ReceiptLineInline(LineInline):
         "pack_size",
         "pack_price",
         "quantity_display",
+        "unit_price_display",
         "total_display",
     )
-    readonly_fields = ("quantity_display", "total_display")
+    readonly_fields = ("quantity_display", "unit_price_display", "total_display")
     min_num = 1
     verbose_name_plural = "Позиции"
 
     @display(description="Итого единиц")
     def quantity_display(self, obj):
-        return fmt_qty(obj.quantity, obj.material.get_unit_display()) if obj.pk else "—"
+        return obj.material.format_qty(obj.quantity) if obj.pk else "—"
+
+    @display(description="Цена за единицу")
+    def unit_price_display(self, obj):
+        if not obj.pk or not obj.pack_size:
+            return "—"
+        parts = obj.material.price_breakdown(obj.pack_price / obj.pack_size)
+        return " · ".join(f"{fmt_price(p)}/{u}" for p, u in parts)
 
     @display(description="Сумма, ₸")
     def total_display(self, obj):
@@ -351,7 +362,7 @@ class PackingAdmin(DocumentAdmin):
 # --- Строки с выбором позиции ------------------------------------------------------
 
 
-class ItemLineForm(ActiveChoicesForm):
+class ItemLineForm(QuantityUnitFormMixin, ActiveChoicesForm):
     """Строка с позицией: материал, деталь + материал, изделие или товар."""
 
     def clean(self):
@@ -366,20 +377,24 @@ class ItemLineForm(ActiveChoicesForm):
         return data
 
 
+class InventoryLineForm(ItemLineForm):
+    quantity_field = "counted_qty"
+
+
 class TransferLineInline(LineInline):
     model = TransferLine
     form = ItemLineForm
     autocomplete_fields = ITEM_FIELDS
-    fields = (*ITEM_FIELDS, "quantity")
+    fields = (*ITEM_FIELDS, "quantity", "entered_unit")
     min_num = 1
     verbose_name_plural = "Позиции"
 
 
 class InventoryLineInline(LineInline):
     model = InventoryLine
-    form = ItemLineForm
+    form = InventoryLineForm
     autocomplete_fields = ITEM_FIELDS
-    fields = (*ITEM_FIELDS, "counted_qty", "difference", "reason")
+    fields = (*ITEM_FIELDS, "counted_qty", "entered_unit", "difference", "reason")
     readonly_fields = ("difference",)
     min_num = 1
     verbose_name_plural = "Позиции"
@@ -444,7 +459,7 @@ class ReceivingLineInline(LineInline):
     model = ReceivingLine
     form = ItemLineForm
     autocomplete_fields = ITEM_FIELDS
-    fields = (*ITEM_FIELDS, "quantity")
+    fields = (*ITEM_FIELDS, "quantity", "entered_unit")
     min_num = 1
     verbose_name_plural = "Позиции"
 
@@ -502,8 +517,7 @@ class AdjustmentAdmin(DocumentAdmin):
     @display(description="Позиции")
     def lines_display(self, obj):
         return "; ".join(
-            f"{line.item_label} × {fmt_qty(line.quantity, line.unit_label)}"
-            for line in obj.lines.all()
+            f"{line.item_label}: {line.quantity_display()}" for line in obj.lines.all()
         )
 
 
@@ -663,26 +677,28 @@ class StockBalanceAdmin(ReadOnlyAdmin):
 
     @display(description="На складе", ordering="quantity")
     def quantity_display(self, obj):
-        return fmt_qty(obj.quantity, obj.unit_label)
+        return obj.format_quantity(obj.quantity)
 
     @display(description="На всех складах")
     def total_display(self, obj):
-        return fmt_qty(getattr(self, "_totals", {}).get(obj.item_key), obj.unit_label)
+        total = getattr(self, "_totals", {}).get(obj.item_key)
+        return obj.format_quantity(total) if total is not None else "—"
 
     @display(description="Доступно, все склады")
     def available_display(self, obj):
-        return fmt_qty(getattr(self, "_totals", {}).get(obj.item_key, ZERO), obj.unit_label)
+        return obj.format_quantity(getattr(self, "_totals", {}).get(obj.item_key, ZERO))
 
     @display(description="На витрине")
     def showcase_display(self, obj):
-        return fmt_qty(getattr(self, "_showcase", {}).get(obj.item_key), obj.unit_label)
+        showcase = getattr(self, "_showcase", {}).get(obj.item_key)
+        return obj.format_quantity(showcase) if showcase is not None else "—"
 
     @display(description="Минимум")
     def min_display(self, obj):
         if not obj.material_id or not obj.material.min_stock:
             return "—"
         total = getattr(self, "_totals", {}).get(obj.item_key) or 0
-        text = fmt_qty(obj.material.min_stock, obj.unit_label)
+        text = obj.material.format_qty(obj.material.min_stock)
         if total < obj.material.min_stock:
             return format_html("<span style='color:#dc2626;font-weight:600'>{} ↓</span>", text)
         return text
@@ -739,7 +755,7 @@ class StockMoveAdmin(ReadOnlyAdmin):
     @display(description="Количество", ordering="quantity")
     def quantity_display(self, obj):
         sign = "+" if obj.quantity > 0 else ""
-        return f"{sign}{fmt_qty(obj.quantity, obj.unit_label)}"
+        return f"{sign}{obj.format_quantity(obj.quantity)}"
 
 
 _ = UnfoldAdminSelectWidget  # зарезервировано для зависимых списков (UX-проход)

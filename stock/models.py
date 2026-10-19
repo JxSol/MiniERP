@@ -21,7 +21,7 @@ from django.db.models import Q, Sum
 from django.utils import timezone
 from simple_history.models import HistoricalRecords
 
-from catalog.models import PRODUCTION_KINDS, Equipment, Material, MaterialOffer
+from catalog.models import PRODUCTION_KINDS, EnteredUnitMixin, Equipment, Material, MaterialOffer
 from core.models import CodeField, UniqueNameModel, next_code, positive_decimal_field
 from production.models import Coloring, Part, Variant
 from sales.models import Product
@@ -169,6 +169,14 @@ class StockItemMixin(models.Model):
     @property
     def unit_label(self) -> str:
         return self.material.get_unit_display() if self.material_id else "шт"
+
+    def format_quantity(self, quantity) -> str:
+        """Количество с единицей; для листов и рулонов — ещё и во второй единице."""
+        from core.admin_utils import fmt_quantity
+
+        if self.material_id:
+            return self.material.format_qty(quantity)
+        return fmt_quantity(quantity, "шт")
 
     def clean_item(self):
         filled = [f for f in ("material", "part", "variant", "product") if getattr(self, f"{f}_id")]
@@ -786,7 +794,7 @@ class Transfer(StockDocument):
         return moves
 
 
-class TransferLine(StockItemMixin):
+class TransferLine(EnteredUnitMixin, StockItemMixin):
     transfer = models.ForeignKey(Transfer, on_delete=models.CASCADE, related_name="lines")
     quantity = positive_decimal_field("Сколько")
 
@@ -796,7 +804,7 @@ class TransferLine(StockItemMixin):
         constraints = [_item_constraint("stock_transferline_single_item")]
 
     def __str__(self):
-        return f"{self.item_label} × {self.quantity}"
+        return f"{self.item_label}: {self.quantity_display()}"
 
     def clean(self):
         super().clean()
@@ -828,7 +836,7 @@ class Inventory(StockDocument):
         return moves
 
 
-class InventoryLine(StockItemMixin):
+class InventoryLine(EnteredUnitMixin, StockItemMixin):
     inventory = models.ForeignKey(Inventory, on_delete=models.CASCADE, related_name="lines")
     counted_qty = models.DecimalField(
         "Фактический остаток",
@@ -853,7 +861,7 @@ class InventoryLine(StockItemMixin):
         constraints = [_item_constraint("stock_inventoryline_single_item")]
 
     def __str__(self):
-        return f"{self.item_label}: {self.counted_qty}"
+        return f"{self.item_label}: {self.quantity_display(self.counted_qty)}"
 
     def clean(self):
         super().clean()
@@ -956,14 +964,14 @@ class WriteOff(AdjustmentDocument):
         verbose_name_plural = "Списания"
 
 
-class AdjustmentLine(StockItemMixin):
+class AdjustmentLine(EnteredUnitMixin, StockItemMixin):
     quantity = positive_decimal_field("Сколько")
 
     class Meta:
         abstract = True
 
     def __str__(self):
-        return f"{self.item_label} × {self.quantity}"
+        return f"{self.item_label}: {self.quantity_display()}"
 
     def clean(self):
         super().clean()

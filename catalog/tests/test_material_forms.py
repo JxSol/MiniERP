@@ -1,0 +1,181 @@
+"""Формы учёта материалов: штучный, листовой, рулонный (ТЗ п. 6.2) — цены, единицы, остатки."""
+
+from decimal import Decimal as D
+
+import pytest
+from django.core.exceptions import ValidationError
+from django.forms.models import modelform_factory
+from django.urls import reverse
+
+from catalog.models import Material, MaterialCategory, MaterialForm, MaterialOffer, QtyUnit, Unit
+from core.demo import load_demo
+from costing.services import recalculate_all
+from sales.admin import ProductPackagingForm
+from sales.models import Product
+from stock.admin import ITEM_FIELDS, ItemLineForm
+from stock.models import (
+    ItemKind,
+    Receipt,
+    ReceiptLine,
+    StockReason,
+    Warehouse,
+    WriteOff,
+    WriteOffLine,
+    balance_of,
+)
+
+pytestmark = pytest.mark.django_db
+
+NBSP = "\u00a0"
+
+
+@pytest.fixture
+def demo():
+    load_demo()
+    recalculate_all()
+
+
+def material(name, form_type, **dims):
+    m = Material(
+        name=name,
+        category=MaterialCategory.objects.get(name="Транспортная"),
+        form_type=form_type,
+        unit=Unit.PIECE,
+        **dims,
+    )
+    m.full_clean(exclude=["name_key"])  # clean() подставит единицу расхода по форме
+    m.save()
+    return m
+
+
+def prices(m):
+    return [(p.quantize(D("0.01")), u) for p, u in m.unit_prices()]
+
+
+def test_roll_material_prices_and_units():
+    bubble = material("ВПП плёнка 120 см", MaterialForm.ROLL, width_cm=D(120), roll_length_m=D(100))
+    assert bubble.unit == Unit.SQ_METER
+    assert bubble.roll_area_m2 == D(120)
+    MaterialOffer.objects.create(material=bubble, pack_size=bubble.roll_area_m2, pack_price=D(6000))
+    assert prices(bubble) == [(D("50.00"), "м²"), (D("60.00"), "пог. м")]
+    assert bubble.to_base(D(5), QtyUnit.LINEAR_METER) == D(6)
+    assert bubble.from_base(D(6), QtyUnit.LINEAR_METER) == D(5)
+    assert bubble.format_qty(D(600)) == f"600{NBSP}м² (500{NBSP}пог. м)"
+    assert bubble.format_entered(D(60), QtyUnit.LINEAR_METER) == f"50{NBSP}пог. м (60{NBSP}м²)"
+
+
+def test_sheet_material_prices_and_units():
+    film = material(
+        "Плёнка упаковочная 58×58 см", MaterialForm.SHEET, width_cm=D(58), length_cm=D(58)
+    )
+    assert film.unit == Unit.SHEET
+    assert film.sheet_area_m2 == D("0.3364")
+    MaterialOffer.objects.create(material=film, pack_size=D(10), pack_price=D(600))
+    assert prices(film) == [(D("60.00"), "лист"), (D("178.36"), "м²")]
+    assert film.to_base(D("0.3364"), QtyUnit.SQ_METER) == D(1)
+    assert film.format_qty(D(10)) == f"10{NBSP}лист (3,364{NBSP}м²)"
+
+
+def test_piece_material_volume_and_prices():
+    box = material(
+        "Коробка 30×30×100 см",
+        MaterialForm.PIECE,
+        width_cm=D(30),
+        length_cm=D(100),
+        height_cm=D(30),
+    )
+    assert box.unit == Unit.PIECE
+    assert box.piece_volume_m3 == D("0.09")
+    MaterialOffer.objects.create(material=box, pack_size=D(10), pack_price=D(600))
+    assert prices(box) == [(D("60.00"), "шт"), (D("666.67"), "м³")]
+    assert box.format_qty(D(10)) == f"10{NBSP}шт (0,9{NBSP}м³)"
+    with pytest.raises(ValidationError, match="вводится"):
+        box.to_base(D(1), QtyUnit.SQ_METER)  # коробки списываются только поштучно
+
+
+def test_sheet_and_roll_require_dimensions():
+    sheet = Material(
+        name="Лист без размеров",
+        category=MaterialCategory.objects.get(name="Транспортная"),
+        form_type=MaterialForm.SHEET,
+        unit=Unit.SHEET,
+    )
+    with pytest.raises(ValidationError, match="ширину и длину"):
+        sheet.full_clean(exclude=["name_key"])
+    roll = Material(
+        name="Рулон без ширины",
+        category=MaterialCategory.objects.get(name="Транспортная"),
+        form_type=MaterialForm.ROLL,
+        unit=Unit.SQ_METER,
+    )
+    with pytest.raises(ValidationError, match="ширину рулона"):
+        roll.full_clean(exclude=["name_key"])
+
+
+def test_packaging_entered_in_linear_meters(demo):
+    bubble = Material.objects.get(name="ВПП плёнка 120 см")
+    product = Product.objects.get(name="Светильник Луна — Белый")
+    form = ProductPackagingForm(
+        data={"material": bubble.pk, "quantity": "0.5", "entered_unit": "lm"}
+    )
+    assert form.is_valid(), form.errors
+    line = form.save(commit=False)
+    line.product = product
+    line.save()
+    assert line.quantity == D("0.6")  # 0,5 пог. м × ширина 1,2 м
+    assert str(line) == f"ВПП плёнка 120 см: 0,5{NBSP}пог. м (0,6{NBSP}м²)"
+    assert ProductPackagingForm(instance=line).initial["quantity"] == D("0.5")
+    wrong = ProductPackagingForm(
+        data={
+            "material": Material.objects.get(name="Коробка 20×20×25").pk,
+            "quantity": "1",
+            "entered_unit": "m2",
+        }
+    )
+    assert not wrong.is_valid() and "entered_unit" in wrong.errors
+
+
+def test_roll_receipt_and_writeoff_in_linear_meters(demo):
+    """Приход 5 рулонов = 600 м²; списание 50 пог. м = 60 м² → остаток 540 м²."""
+    bubble = Material.objects.get(name="ВПП плёнка 120 см")
+    wh = Warehouse.objects.create(name="Тестовый")
+    key = (ItemKind.MATERIAL.value, bubble.pk, None)
+    receipt = Receipt.objects.create(warehouse=wh)
+    offer = bubble.offers.get()
+    assert offer.pack_size == D(120)
+    ReceiptLine.objects.create(
+        receipt=receipt,
+        material=bubble,
+        offer=offer,
+        packs=D(5),
+        pack_size=offer.pack_size,
+        pack_price=offer.pack_price,
+    )
+    receipt.post()
+    assert balance_of(wh.pk, key) == D(600)
+
+    LineForm = modelform_factory(
+        WriteOffLine, form=ItemLineForm, fields=(*ITEM_FIELDS, "quantity", "entered_unit")
+    )
+    doc = WriteOff.objects.create(warehouse=wh, reason=StockReason.objects.get(name="Прочее"))
+    form = LineForm(
+        data={"material": bubble.pk, "quantity": "50", "entered_unit": "lm"},
+        instance=WriteOffLine(document=doc),
+    )
+    assert form.is_valid(), form.errors
+    line = form.save()
+    assert line.quantity == D(60)
+    assert line.quantity_display() == f"50{NBSP}пог. м (60{NBSP}м²)"
+    doc.post()
+    assert balance_of(wh.pk, key) == D(540)
+
+
+def test_material_pages_show_forms(client, admin_user, demo):
+    client.force_login(admin_user)
+    bubble = Material.objects.get(name="ВПП плёнка 120 см")
+    html = client.get(reverse("admin:catalog_material_change", args=[bubble.pk])).content.decode()
+    assert "Форма учёта" in html and "Длина рулона" in html
+    assert "50" in html and "пог. м" in html
+    listing = client.get(reverse("admin:stock_stockbalance_changelist")).content.decode()
+    assert f"600{NBSP}м² (500{NBSP}пог. м)" in listing
+    assert f"10{NBSP}лист (3,364{NBSP}м²)" in listing

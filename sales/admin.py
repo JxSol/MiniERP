@@ -17,6 +17,7 @@ from core.admin_utils import (
     safe_tree,
     thumbnail,
 )
+from core.forms import ActiveChoicesForm, QuantityUnitFormMixin
 from core.models import SiteSettings
 from costing.engine import direct_cost
 from costing.services import fix_cost, product_tree
@@ -40,10 +41,17 @@ class ProductItemInline(LineInline):
     verbose_name_plural = "Состав"
 
 
+class ProductPackagingForm(QuantityUnitFormMixin, ActiveChoicesForm):
+    class Meta:
+        model = ProductPackaging
+        fields = ("material", "quantity", "entered_unit")
+
+
 class ProductPackagingInline(LineInline):
     model = ProductPackaging
+    form = ProductPackagingForm
     autocomplete_fields = ("material",)
-    fields = ("material", "quantity")
+    fields = ("material", "quantity", "entered_unit")
     verbose_name_plural = "Упаковка"
 
 
