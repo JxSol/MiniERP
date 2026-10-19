@@ -11,9 +11,20 @@ from core.demo import load_demo
 from core.roles import SELLER, TECHNOLOGIST
 from costing.services import recalculate_all
 from production.models import Part
-from stock.models import DocumentStatus, ItemKind, ProductionRun, Receipt, Warehouse, balance_of
+from stock.models import (
+    DocumentStatus,
+    ItemKind,
+    ProductionRun,
+    Receipt,
+    StockBalance,
+    StockMove,
+    Warehouse,
+    balance_of,
+)
 
 pytestmark = pytest.mark.django_db
+
+NBSP = "\u00a0"
 
 MODELS = [
     "receipt",
@@ -183,3 +194,21 @@ def test_showcase_columns_in_balances(client, admin_user, demo):
     assert "available_display" in columns and "showcase_display" in columns
     html = page.content.decode()
     assert "На витрине" in html and "Магазин — витрина" in html
+
+
+def test_balance_and_move_cards_show_units_and_history(client, admin_user, demo):
+    """Карточка остатка: позиция, склад, остаток с единицами, последние движения; без сырых полей."""
+    client.force_login(admin_user)
+    bubble = Material.objects.get(name="ВПП плёнка 120 см")
+    balance = StockBalance.objects.get(material=bubble, warehouse__name="Цех")
+    html = client.get(
+        reverse("admin:stock_stockbalance_change", args=[balance.pk])
+    ).content.decode()
+    assert f"600{NBSP}м² (500{NBSP}пог. м)" in html
+    assert "Последние движения" in html and "BUY-" in html
+    assert "600,0000" not in html and "Материал детали" not in html
+    assert "core/admin.js" in html
+    move = StockMove.objects.filter(material=bubble).first()
+    page = client.get(reverse("admin:stock_stockmove_change", args=[move.pk])).content.decode()
+    assert "Документ" in page and f"+600{NBSP}м²" in page
+    assert str(balance).endswith(f"Цех: 600{NBSP}м² (500{NBSP}пог. м)")

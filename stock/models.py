@@ -257,7 +257,8 @@ class StockMove(StockItemMixin):
         ]
 
     def __str__(self):
-        return f"{self.date} {self.item_label}: {self.quantity:+}"
+        sign = "+" if self.quantity > 0 else "−"
+        return f"{self.date:%d.%m.%Y} {self.item_label}: {sign}{self.format_quantity(abs(self.quantity))}"
 
 
 class StockBalance(StockItemMixin):
@@ -281,7 +282,7 @@ class StockBalance(StockItemMixin):
         ]
 
     def __str__(self):
-        return f"{self.item_label} @ {self.warehouse}: {self.quantity}"
+        return f"{self.item_label} — {self.warehouse}: {self.format_quantity(self.quantity)}"
 
 
 def balance_of(warehouse_id: int, key: ItemKey, exclude_document=None) -> Decimal:

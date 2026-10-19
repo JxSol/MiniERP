@@ -11,7 +11,8 @@ from django.contrib.admin import SimpleListFilter
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
 from django.urls import reverse
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
+from django.utils.http import urlencode
 from django.utils.safestring import mark_safe
 from unfold.admin import ModelAdmin
 from unfold.decorators import action, display
@@ -57,6 +58,34 @@ fmt_qty = fmt_quantity
 def _label(text: str, kind: str = "info") -> str:
     """Цветная метка unfold (как в списках) для readonly-полей и колонок."""
     return mark_safe(render_to_string("unfold/helpers/label.html", {"type": kind, "text": text}))
+
+
+ITEM_ADMIN_URLS = {
+    "material": "admin:catalog_material_change",
+    "part": "admin:production_part_change",
+    "variant": "admin:production_variant_change",
+    "product": "admin:sales_product_change",
+}
+
+
+def _item_link(obj) -> str:
+    """Название позиции со ссылкой на её карточку (материал, деталь, изделие, товар)."""
+    for field, url_name in ITEM_ADMIN_URLS.items():
+        pk = getattr(obj, f"{field}_id")
+        if pk:
+            url = reverse(url_name, args=[pk])
+            return format_html('<a href="{}" class="text-primary-600">{}</a>', url, obj.item_label)
+    return obj.item_label
+
+
+def _item_filter_query(obj) -> str:
+    """Параметры фильтра журнала движений по этой позиции."""
+    params = {}
+    for field in ("material", "part", "part_material", "variant", "product"):
+        pk = getattr(obj, f"{field}_id")
+        if pk:
+            params[f"{field}__id__exact"] = pk
+    return urlencode(params)
 
 
 def _doc_link(move: StockMove) -> str:
@@ -573,6 +602,8 @@ class LowStockFilter(SimpleListFilter):
 
 
 class ReadOnlyAdmin(PageHelpMixin, ModelAdmin):
+    """Остатки и движения считаются системой: только просмотр, без форм редактирования."""
+
     def has_add_permission(self, request):
         return False
 
@@ -617,6 +648,16 @@ class StockBalanceAdmin(ReadOnlyAdmin):
     """Остатки по вкладкам: материалы, детали, изделия, товары."""
 
     list_display = ("item_display", "warehouse_display", "quantity_display", "total_display")
+    # Карточка остатка: только осмысленные поля (сырые ссылки модели не показываем)
+    fields = (
+        "item_link",
+        "warehouse_display",
+        "quantity_detail",
+        "available_display",
+        "showcase_display",
+        "moves_display",
+    )
+    readonly_fields = fields
     list_filter = ("warehouse",)
     search_fields = (
         "material__name",
@@ -669,6 +710,54 @@ class StockBalanceAdmin(ReadOnlyAdmin):
     def item_display(self, obj):
         return obj.item_label
 
+    @display(description="Позиция")
+    def item_link(self, obj):
+        return _item_link(obj)
+
+    @display(description="Остаток на этом складе")
+    def quantity_detail(self, obj):
+        return obj.format_quantity(obj.quantity)
+
+    @display(description="Последние движения")
+    def moves_display(self, obj):
+        moves = (
+            StockMove.objects.filter(warehouse_id=obj.warehouse_id)
+            .filter(
+                **{
+                    f: getattr(obj, f)
+                    for f in (
+                        "material_id",
+                        "part_id",
+                        "part_material_id",
+                        "variant_id",
+                        "product_id",
+                    )
+                }
+            )
+            .prefetch_related("document")
+            .order_by("-date", "-pk")[:20]
+        )
+        rows = format_html_join(
+            "",
+            "<tr><td style='padding:4px 12px 4px 0'>{}</td><td style='padding:4px 12px 4px 0'>{}</td>"
+            "<td style='padding:4px 0;text-align:right'>{}</td></tr>",
+            (
+                (
+                    move.date.strftime("%d.%m.%Y"),
+                    _doc_link(move),
+                    ("+" if move.quantity > 0 else "−") + obj.format_quantity(abs(move.quantity)),
+                )
+                for move in moves
+            ),
+        )
+        all_url = f"{reverse('admin:stock_stockmove_changelist')}?{_item_filter_query(obj)}"
+        return format_html(
+            "<table>{}</table><p style='margin-top:8px'><a href='{}' class='text-primary-600'>"
+            "Все движения по позиции →</a></p>",
+            rows,
+            all_url,
+        )
+
     @display(description="Склад", ordering="warehouse__name")
     def warehouse_display(self, obj):
         if obj.warehouse.is_showcase:
@@ -714,6 +803,8 @@ class StockMoveAdmin(ReadOnlyAdmin):
         "warehouse",
         "quantity_display",
     )
+    fields = ("date", "document_display", "item_link", "warehouse", "quantity_display")
+    readonly_fields = fields
     list_filter = (KindFilter, "warehouse", "date")
     search_fields = (
         "material__name",
@@ -743,6 +834,10 @@ class StockMoveAdmin(ReadOnlyAdmin):
     @display(description="Документ")
     def document_display(self, obj):
         return _doc_link(obj)
+
+    @display(description="Позиция")
+    def item_link(self, obj):
+        return _item_link(obj)
 
     @display(description="Уровень")
     def kind_display(self, obj):
