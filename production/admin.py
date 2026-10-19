@@ -30,6 +30,7 @@ from core.admin_utils import (
     fmt_number,
     fmt_quantity,
     hx_redirect,
+    photo_square,
     render_cost_tree,
     safe_tree,
     thumbnail,
@@ -39,7 +40,7 @@ from core.models import Size
 from core.widgets import DurationMinutesField
 from costing.services import model_tree, part_tree, variant_tree
 from gallery.admin import ModelPhotoInline, PartPhotoInline, PhotoUploaderMixin, VariantPhotoInline
-from gallery.models import main_photo
+from gallery.models import main_photo, main_photo_for_model, main_photo_for_variant
 
 from . import generators, services
 from .models import (
@@ -376,6 +377,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
     inlines = (ModelPartInline, ModelComponentInline, ModelOperationInline, ModelPhotoInline)
     readonly_fields = (
         "code",
+        "main_photo_display",
         "calculated_weight_display",
         "variants_overview",
         "products_overview",
@@ -390,6 +392,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
             {
                 "classes": ["tab"],
                 "fields": (
+                    "main_photo_display",
                     "name",
                     "code",
                     "category",
@@ -429,6 +432,10 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
     def photo(self, obj):
         p = main_photo(model=obj)
         return thumbnail(p.preview_url if p else "", 40)
+
+    @display(description="Фото первого варианта")
+    def main_photo_display(self, obj):
+        return photo_square(main_photo_for_model(obj) if obj.pk else None)
 
     @display(description="Варианты")
     def variants_display(self, obj):
@@ -702,7 +709,7 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
     search_fields = ("name", "code", "model__name", "model__code")
     autocomplete_fields = ("model",)
     inlines = (VariantSlotInline, VariantPhotoInline)
-    readonly_fields = ("full_code", "product_display", "cost_tree")
+    readonly_fields = ("full_code", "main_photo_display", "product_display", "cost_tree")
     cost_fields = ("cost_display", "cost_tree")
     fieldsets = (
         (
@@ -710,6 +717,7 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
             {
                 "classes": ["tab"],
                 "fields": (
+                    "main_photo_display",
                     "model",
                     "name",
                     "full_code",
@@ -737,6 +745,10 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
         if obj:
             fields.append("model")  # вариант не переносится в другую модель
         return fields
+
+    @display(description="Главное фото")
+    def main_photo_display(self, obj):
+        return photo_square(main_photo_for_variant(obj) if obj.pk else None)
 
     def get_changeform_initial_data(self, request):
         return {"model": request.GET.get("model")}

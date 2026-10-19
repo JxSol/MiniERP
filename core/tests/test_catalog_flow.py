@@ -11,13 +11,20 @@ import pytest
 from django.contrib.auth.models import Group, User
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.urls import reverse
 from PIL import Image
 
 from catalog.models import Color, Material
 from core.demo import load_demo
 from core.roles import SELLER, TECHNOLOGIST
 from costing.services import fix_cost, recalculate_all
-from gallery.models import Photo, PhotoKind, main_photo_for_product
+from gallery.models import (
+    Photo,
+    PhotoKind,
+    main_photo_for_model,
+    main_photo_for_product,
+    main_photo_for_variant,
+)
 from production import generators
 from production.models import Part, ProductModel, Variant
 from sales.models import Product, ProductStatus, validate_barcode
@@ -262,3 +269,30 @@ def test_model_calculated_weight_counts_only_gram_parts(demo):
     assert luna.calculated_weight_g() == D(260)
     luna.weight_g, luna.length_cm = 270, D("12.5")
     luna.full_clean(exclude=["name_key"])
+
+
+def test_model_card_photo_prefers_first_variant(demo):
+    luna = demo["luna"]
+    assert main_photo_for_model(luna) is None
+    own = Photo.objects.create(model=luna, image=image_file())
+    assert main_photo_for_model(luna) == own
+    first = luna.variants.order_by("code").first()
+    assert main_photo_for_variant(first) == own  # у варианта своего нет — берётся фото модели
+    variant_photo = Photo.objects.create(variant=first, image=image_file())
+    assert main_photo_for_model(luna) == variant_photo
+    assert main_photo_for_variant(first) == variant_photo
+
+
+def test_main_photo_square_on_cards(client, admin_user, demo):
+    """Главное фото квадратом показывается на первой вкладке варианта, модели и товара."""
+    client.force_login(admin_user)
+    luna = demo["luna"]
+    first = luna.variants.order_by("code").first()
+    product = Product.objects.get(name=f"Светильник Луна — {first.name}")
+    page = client.get(reverse("admin:production_variant_change", args=[first.pk])).content.decode()
+    assert "Нет фото" in page
+    photo = Photo.objects.create(variant=first, image=image_file())
+    for obj in (first, luna, product):
+        url = reverse(f"admin:{obj._meta.app_label}_{obj._meta.model_name}_change", args=[obj.pk])
+        html = client.get(url).content.decode()
+        assert photo.preview_url in html and "object-fit:cover" in html, obj

@@ -12,6 +12,7 @@ from core.admin_utils import (
     fmt_money,
     fmt_number,
     hx_redirect,
+    photo_square,
     render_cost_tree,
     safe_tree,
     thumbnail,
@@ -105,7 +106,14 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
         ProductPhotoInline,
         CostSnapshotInline,
     )
-    readonly_fields = ("sku", "problems_display", "cost_tree", "fixed_display", "growth_display")
+    readonly_fields = (
+        "sku",
+        "main_photo_display",
+        "problems_display",
+        "cost_tree",
+        "fixed_display",
+        "growth_display",
+    )
     cost_fields = ("cost_display", "fixed_display", "growth_display", "cost_tree")
     actions = ("fix_cost_bulk",)
     actions_detail = ("fix_cost_detail",)
@@ -115,6 +123,7 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
             {
                 "classes": ["tab"],
                 "fields": (
+                    "main_photo_display",
                     "sku",
                     "name",
                     "kind",
@@ -136,6 +145,10 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
 
     def get_queryset(self, request):
         return super().get_queryset(request).prefetch_related("snapshots")
+
+    @display(description="Главное фото")
+    def main_photo_display(self, obj):
+        return photo_square(main_photo_for_product(obj) if obj.pk else None)
 
     def formfield_for_manytomany(self, db_field, request, **kwargs):
         if db_field.name == "tags":

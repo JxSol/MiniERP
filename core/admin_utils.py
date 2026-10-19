@@ -101,6 +101,19 @@ def thumbnail(url: str, size: int = 48) -> str:
     )
 
 
+def photo_square(photo, size: int = 240, empty: str = "Нет фото") -> str:
+    """Главное фото квадратом 1:1 (object-fit: cover) для первой вкладки карточки; только показ."""
+    if photo is None:
+        return format_html('<span class="text-base-500">{}</span>', empty)
+    return format_html(
+        '<img src="{}" alt="" style="width:{}px;height:{}px;object-fit:cover;'
+        'border-radius:8px;display:block">',
+        photo.preview_url,
+        size,
+        size,
+    )
+
+
 def hx_redirect(request, url: str) -> HttpResponse:
     """
     Переход после действия. Диалоги unfold отправляются через HTMX: ему нужен

@@ -197,12 +197,25 @@ def main_photo(**owner) -> Photo | None:
     return Photo.objects.filter(**owner, kind=PhotoKind.MAIN).first()
 
 
+def main_photo_for_variant(variant) -> Photo | None:
+    """Главное фото варианта с наследованием: вариант → модель."""
+    return main_photo(variant=variant) or main_photo(model=variant.model)
+
+
+def main_photo_for_model(model) -> Photo | None:
+    """Фото для карточки модели: главное фото первого варианта, иначе фото самой модели."""
+    first = model.variants.order_by("code").first()
+    if first is not None:
+        photo = main_photo(variant=first)
+        if photo:
+            return photo
+    return main_photo(model=model)
+
+
 def main_photo_for_product(product) -> Photo | None:
     """Главное фото товара с наследованием: товар → вариант → модель (ТЗ п. 5.2)."""
     photo = main_photo(product=product)
     if photo:
         return photo
     variant = product.main_variant()
-    if variant is None:
-        return None
-    return main_photo(variant=variant) or main_photo(model=variant.model)
+    return main_photo_for_variant(variant) if variant is not None else None
