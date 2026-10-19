@@ -36,14 +36,10 @@ ItemKey = tuple[str, int, int | None]
 
 
 class Warehouse(UniqueNameModel):
-    is_default = models.BooleanField(
-        "По умолчанию", default=False, help_text="Подставляется в новые документы."
-    )
+    is_default = models.BooleanField("По умолчанию", default=False)
     is_showcase = models.BooleanField(
         "Витрина: образцы, не для продажи",
         default=False,
-        help_text="Остатки этого склада не входят в «Доступно» и показываются в остатках отдельно "
-        "как «На витрине». Образцы отправляются сюда документом «Перемещения».",
     )
     order = models.PositiveIntegerField("Порядок", default=0)
 
@@ -337,9 +333,7 @@ class StockDocument(models.Model):
 
     number = CodeField("Номер", unique=True)
     date = models.DateField("Дата", default=timezone.localdate)
-    warehouse = models.ForeignKey(
-        Warehouse, verbose_name="Склад", on_delete=models.PROTECT, help_text="Где это произошло."
-    )
+    warehouse = models.ForeignKey(Warehouse, verbose_name="Склад", on_delete=models.PROTECT)
     status = models.CharField(
         "Статус", max_length=10, choices=DocumentStatus.choices, default=DocumentStatus.DRAFT
     )
@@ -549,7 +543,7 @@ class ProductionRun(StockDocument):
         verbose_name="Материал",
         on_delete=models.PROTECT,
         related_name="runs",
-        help_text="Из чего печатали (цвет). По умолчанию — материал детали.",
+        help_text="По умолчанию — материал детали.",
     )
     equipment = models.ForeignKey(
         Equipment,
@@ -917,7 +911,6 @@ class AdjustmentDocument(StockDocument):
         verbose_name="Причина",
         on_delete=models.PROTECT,
         related_name="+",
-        help_text="Из справочника «Причины прихода и списания».",
     )
 
     class Meta(StockDocument.Meta):

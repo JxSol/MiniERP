@@ -207,7 +207,7 @@ def test_balance_and_move_cards_show_units_and_history(client, admin_user, demo)
     assert f"600{NBSP}м² (500{NBSP}пог. м)" in html
     assert "Последние движения" in html and "BUY-" in html
     assert "600,0000" not in html and "Материал детали" not in html
-    assert "core/admin.js" in html
+    assert chr(34).join(["title=", "Что это за поле", ""]) in html  # значок «i» с пояснением
     move = StockMove.objects.filter(material=bubble).first()
     page = client.get(reverse("admin:stock_stockmove_change", args=[move.pk])).content.decode()
     assert "Документ" in page and f"+600{NBSP}м²" in page

@@ -1,0 +1,25 @@
+{% if meaning %}
+<span x-data="{ open: false, top: 0, left: 0,
+                toggle() {
+                    const r = this.$refs.btn.getBoundingClientRect();
+                    this.top = r.bottom + 6;
+                    this.left = Math.max(8, Math.min(r.left, window.innerWidth - 336));
+                    this.open = !this.open;
+                } }"
+      class="inline-flex items-center align-middle ml-1 font-normal">
+    <button type="button" x-ref="btn" x-on:click.stop="toggle()" title="Что это за поле"
+            class="material-symbols-outlined text-base-300 hover:text-primary-600 dark:text-base-600 dark:hover:text-primary-500 cursor-pointer"
+            style="font-size:14px; line-height:1">info</button>
+    <template x-teleport="body">
+        <div x-show="open"
+             x-on:click.outside="open = false"
+             x-on:keydown.escape.window="open = false"
+             x-on:scroll.window="open = false"
+             x-bind:style="`position:fixed; top:${top}px; left:${left}px; z-index:60; width:20rem`"
+             style="display:none"
+             class="field-meaning rounded-default border border-base-200 bg-white p-3 text-xs font-normal leading-relaxed text-base-700 shadow-lg whitespace-normal dark:bg-base-800 dark:border-base-700 dark:text-base-200">
+            {{ meaning }}
+        </div>
+    </template>
+</span>
+{% endif %}

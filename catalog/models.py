@@ -87,8 +87,7 @@ class MaterialCategory(UniqueNameModel):
         "Вид материала",
         max_length=20,
         choices=MaterialKind.choices,
-        help_text="Определяет, на каких станках материал можно использовать. "
-        "У вложенной категории берётся от родителя.",
+        help_text="У вложенной категории берётся от родителя.",
     )
     path = models.CharField("Полное название", max_length=500, editable=False, db_index=True)
 
@@ -134,9 +133,8 @@ class Color(UniqueNameModel):
         max_length=7,
         default="#FFFFFF",
         validators=[RegexValidator(r"^#[0-9A-Fa-f]{6}$", "Формат #RRGGBB")],
-        help_text="Цвет кружка-образца в списках, например #388E3C.",
     )
-    order = models.PositiveIntegerField("Порядок", default=0, help_text="Порядок в списках выбора.")
+    order = models.PositiveIntegerField("Порядок", default=0)
 
     class Meta:
         verbose_name = "Цвет"
@@ -237,7 +235,6 @@ class Material(UniqueNameModel):
         verbose_name="Категория",
         on_delete=models.PROTECT,
         related_name="materials",
-        help_text="От категории зависит, на каких станках материал можно использовать.",
     )
     color = models.ForeignKey(
         Color,
@@ -246,23 +243,18 @@ class Material(UniqueNameModel):
         blank=True,
         on_delete=models.PROTECT,
         related_name="materials",
-        help_text="Из палитры. Для фанеры, шнуров и упаковки можно не указывать.",
+        help_text="Для фанеры, шнуров и упаковки можно не указывать.",
     )
     form_type = models.CharField(
         "Форма учёта",
         max_length=10,
         choices=MaterialForm.choices,
         default=MaterialForm.PLAIN,
-        help_text="Обычный — пластик, смола, крепёж (единица выбирается вручную). "
-        "Штучный — коробки с габаритами (шт, объём). Листовой — лист и м². "
-        "Рулонный — м² и пог. м. Погонный — кабель, верёвка (м).",
     )
     unit = models.CharField(
         "Единица расхода",
         max_length=10,
         choices=Unit.choices,
-        help_text="Для обычной формы: граммы для пластика, мл для смолы, штуки. "
-        "Для остальных форм ставится автоматически.",
     )
     width_cm = models.DecimalField(
         "Ширина, см",
@@ -271,7 +263,6 @@ class Material(UniqueNameModel):
         null=True,
         blank=True,
         validators=[MinValueValidator(Decimal("0.01"))],
-        help_text="Штучный: ширина коробки. Листовой: ширина листа. Рулонный: ширина рулона.",
     )
     length_cm = models.DecimalField(
         "Длина, см",
@@ -280,7 +271,6 @@ class Material(UniqueNameModel):
         null=True,
         blank=True,
         validators=[MinValueValidator(Decimal("0.01"))],
-        help_text="Штучный: длина коробки. Листовой: длина листа.",
     )
     height_cm = models.DecimalField(
         "Высота, см",
@@ -289,7 +279,6 @@ class Material(UniqueNameModel):
         null=True,
         blank=True,
         validators=[MinValueValidator(Decimal("0.01"))],
-        help_text="Только для штучного: по трём размерам считается объём.",
     )
     roll_length_m = models.DecimalField(
         "Длина рулона, м",
@@ -298,8 +287,6 @@ class Material(UniqueNameModel):
         null=True,
         blank=True,
         validators=[MinValueValidator(Decimal("0.01"))],
-        help_text="Только для рулонного: из ширины и длины считается площадь рулона — "
-        "она подставляется как упаковка в предложениях поставщиков.",
     )
     min_stock = models.DecimalField(
         "Минимальный остаток",
@@ -307,7 +294,7 @@ class Material(UniqueNameModel):
         decimal_places=4,
         default=Decimal(0),
         validators=[MinValueValidator(Decimal(0))],
-        help_text="Когда остаток по всем складам опускается ниже, материал попадает в «Требует внимания». 0 — не следить.",
+        help_text="0 — не следить.",
     )
 
     history = HistoricalRecords()
@@ -628,31 +615,26 @@ class Equipment(UniqueNameModel):
         "Технология",
         max_length=20,
         choices=Technology.choices,
-        help_text="Определяет подходящие материалы и обозначение в коде детали (C-FDM-…).",
     )
     quantity = models.PositiveIntegerField(
         "Количество, шт",
         default=1,
         validators=[MinValueValidator(1)],
-        help_text="Сколько таких станков. На расчёт не влияет, нужно для планирования.",
     )
-    purchase_price = money_field("Цена покупки одного, ₸", help_text="Сколько стоил станок.")
+    purchase_price = money_field("Цена покупки одного, ₸")
     maintenance_cost = money_field(
         "Обслуживание за весь срок, ₸",
         default=Decimal(0),
-        help_text="Сопла, ремни, хотэнды, пластины; для лазера — трубки, линзы, зеркала.",
     )
     residual_value = money_field(
         "Остаточная стоимость, ₸",
         default=Decimal(0),
-        help_text="За сколько можно продать станок в конце срока. Обычно 0.",
     )
     resource_hours = models.DecimalField(
         "Ресурс, ч",
         max_digits=10,
         decimal_places=1,
         validators=[MinValueValidator(Decimal(1))],
-        help_text="Сколько часов станок отработает до замены. Для принтера ~5 000.",
     )
     power_kw = models.DecimalField(
         "Средняя мощность, кВт",
@@ -665,7 +647,7 @@ class Equipment(UniqueNameModel):
         "% брака",
         null=True,
         blank=True,
-        help_text="Доля неудачных запусков на этом станке. Пусто — из общих настроек.",
+        help_text="Пусто — из общих настроек.",
     )
 
     history = HistoricalRecords()
@@ -726,13 +708,12 @@ class OperationType(UniqueNameModel):
         "Уровень",
         max_length=10,
         choices=OperationLevel.choices,
-        help_text="Где операция применяется: обработка детали, сборка модели или комплектация товара.",
     )
     rate = money_field(
         "Ставка, ₸/ч",
         null=True,
         blank=True,
-        help_text="Стоимость часа этой работы. Пусто — ставка из общих настроек.",
+        help_text="Пусто — ставка из общих настроек.",
     )
     default_minutes = models.DecimalField(
         "Время по умолчанию, мин",
@@ -741,7 +722,6 @@ class OperationType(UniqueNameModel):
         null=True,
         blank=True,
         validators=[MinValueValidator(Decimal("0.01"))],
-        help_text="Подставляется, когда операцию добавляет система (упаковка, комплектация).",
     )
     key = models.SlugField(
         "Системный ключ",
@@ -750,7 +730,6 @@ class OperationType(UniqueNameModel):
         null=True,
         blank=True,
         editable=False,
-        help_text="Для операций, которые система подставляет сама (упаковка, комплектация).",
     )
     order = models.PositiveIntegerField("Порядок", default=0)
 

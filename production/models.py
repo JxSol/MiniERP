@@ -115,8 +115,7 @@ class Part(UniqueNameModel):
         verbose_name="Станок",
         on_delete=models.PROTECT,
         related_name="parts",
-        help_text="На чём изготавливается. Технология станка попадает в код детали (C-FDM-…); "
-        "поменять технологию у готовой детали нельзя — это уже другая деталь.",
+        help_text="Поменять технологию у готовой детали нельзя — это уже другая деталь: нажмите «Копировать деталь».",
     )
     material = models.ForeignKey(
         Material,
@@ -128,7 +127,6 @@ class Part(UniqueNameModel):
     )
     batch_material_qty = positive_decimal_field(
         "Расход материала на партию",
-        help_text="Как показывает слайсер или программа лазера — на весь стол или лист.",
     )
     batch_material_unit = models.CharField(
         "Единица расхода",
@@ -136,20 +134,17 @@ class Part(UniqueNameModel):
         choices=QtyUnit.choices,
         blank=True,
         default="",
-        help_text="Пусто — единица материала. Для листового материала расход можно указать в м².",
     )
     batch_minutes = models.DecimalField(
         "Время на партию",
         max_digits=10,
         decimal_places=4,
         validators=[MinValueValidator(Decimal("0.01"))],
-        help_text="Хранится в минутах; вводится как дни, часы, минуты, секунды.",
     )
     batch_size = models.PositiveIntegerField(
         "Штук в партии",
         default=1,
         validators=[MinValueValidator(1)],
-        help_text="Сколько деталей выходит со стола или с листа.",
     )
     scrap_percent = percent_field("% брака", null=True, blank=True, help_text="Пусто — из станка.")
     model_file = models.FileField("Файл модели", upload_to="part_files/", blank=True)
@@ -248,9 +243,7 @@ class ProductModel(UniqueNameModel):
     status = models.CharField(
         "Статус", max_length=10, choices=ModelStatus.choices, default=ModelStatus.DRAFT
     )
-    description = models.TextField(
-        "Описание", blank=True, help_text="База для описаний на площадках."
-    )
+    description = models.TextField("Описание", blank=True)
     default_packaging = models.ForeignKey(
         Material,
         verbose_name="Упаковка по умолчанию",
@@ -259,7 +252,6 @@ class ProductModel(UniqueNameModel):
         on_delete=models.PROTECT,
         related_name="+",
         limit_choices_to={"category__kind": MaterialKind.PACKAGING},
-        help_text="Подставляется в поштучные товары этой модели.",
     )
     default_packing_minutes = models.DecimalField(
         "Время упаковки по умолчанию, мин",
@@ -274,8 +266,7 @@ class ProductModel(UniqueNameModel):
         null=True,
         blank=True,
         validators=[MinValueValidator(1)],
-        help_text="Готовое изделие без упаковки, по весам. Рядом — расчётная масса пластика "
-        "по нормам деталей, для сверки.",
+        help_text="Без упаковки, по весам. Рядом — расчётная масса пластика по нормам деталей, для сверки.",
     )
     length_cm = models.DecimalField(
         "Длина, см",
@@ -309,7 +300,6 @@ class ProductModel(UniqueNameModel):
         blank=True,
         on_delete=models.PROTECT,
         related_name="sizes",
-        help_text="Для размерных моделей: «Конструктор XL» → базовая «Конструктор».",
     )
     size = models.ForeignKey(
         Size,
@@ -322,7 +312,6 @@ class ProductModel(UniqueNameModel):
         "Группа на площадках",
         max_length=100,
         blank=True,
-        help_text="Код объединения карточек вариантов и размеров на площадках.",
     )
 
     cost_cached = models.DecimalField(
@@ -490,7 +479,6 @@ class Variant(ArchivableModel):
         "Предупреждение для карточки",
         max_length=200,
         blank=True,
-        help_text="Например: «цвета могут отличаться от фото».",
     )
 
     cost_cached = models.DecimalField(

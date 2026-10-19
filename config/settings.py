@@ -164,8 +164,6 @@ UNFOLD = {
     "SITE_SYMBOL": "precision_manufacturing",
     "SHOW_HISTORY": True,
     "STYLES": [lambda request: static("core/admin.css")],
-    # Подсказки при наведении на подписи полей (текст справки → title)
-    "SCRIPTS": [lambda request: static("core/admin.js")],
     # Глобальный поиск по артикулу, названию, штрихкоду (Ctrl+K)
     "COMMAND": {"search_models": True, "show_history": True},
     "SIDEBAR": {

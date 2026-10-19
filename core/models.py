@@ -111,9 +111,7 @@ def positive_decimal_field(verbose_name, **kwargs):
 class ArchivableModel(models.Model):
     """Ничего не удаляется насовсем: записи отправляются в архив (ТЗ п. 5.7)."""
 
-    is_active = models.BooleanField(
-        "Активно", default=True, help_text="Архивные записи скрываются из списков выбора."
-    )
+    is_active = models.BooleanField("Активно", default=True)
     notes = models.TextField("Примечание", blank=True)
     created_at = models.DateTimeField("Создано", auto_now_add=True)
     updated_at = models.DateTimeField("Изменено", auto_now=True)
@@ -180,9 +178,7 @@ class SiteSettings(models.Model):
     max_seller_discount_percent = percent_field(
         "Максимальная скидка продавца, %", default=Decimal(10)
     )
-    site_url = models.URLField(
-        "Адрес системы для QR-ссылок", blank=True, help_text="Например, https://erp.example.kz"
-    )
+    site_url = models.URLField("Адрес системы для QR-ссылок", blank=True)
 
     history = HistoricalRecords()
 
@@ -218,7 +214,7 @@ class Tag(UniqueNameModel):
 
 
 class Size(UniqueNameModel):
-    order = models.PositiveIntegerField("Порядок", default=0, help_text="Порядок в списках выбора.")
+    order = models.PositiveIntegerField("Порядок", default=0)
 
     class Meta:
         verbose_name = "Размер"

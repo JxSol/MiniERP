@@ -68,7 +68,7 @@ class Product(UniqueNameModel):
         max_length=14,
         blank=True,
         validators=[validate_barcode],
-        help_text="Необязательно. Используется площадками, у которых свой штрихкод не указан.",
+        help_text="Используется площадками, у которых свой штрихкод не указан.",
     )
     length_cm = models.DecimalField(
         "Длина в упаковке, см",
