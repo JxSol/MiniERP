@@ -23,6 +23,7 @@ from stock.models import (
     Receiving,
     ReceivingLine,
     Shortage,
+    StockMove,
     StockReason,
     Transfer,
     TransferLine,
@@ -360,3 +361,27 @@ def test_showcase_warehouse_is_not_available(demo):
     showcase.is_default = True
     with pytest.raises(ValidationError, match="по умолчанию"):
         showcase.full_clean()
+
+
+def test_posted_document_cannot_be_deleted_and_delete_removes_moves(client, demo):
+    """Удалить проведённую закупку из админки нельзя; delete() модели снимает проводки."""
+    wh = demo["wh"]
+    white = mat("PLA Basic", "Белый")
+    receipt = Receipt.objects.create(warehouse=wh)
+    ReceiptLine.objects.create(
+        receipt=receipt, material=white, packs=1, pack_size=D(1000), pack_price=D(9000)
+    )
+    receipt.post()
+    assert material_balance(wh, white) == D(1000)
+
+    from django.contrib.auth.models import User
+    from django.urls import reverse
+
+    admin = User.objects.create_superuser("root", "root@example.kz", "x")
+    client.force_login(admin)
+    response = client.get(reverse("admin:stock_receipt_delete", args=[receipt.pk]))
+    assert response.status_code == 403  # проведённый — только отменить
+
+    receipt.delete()  # программное удаление: проводки сняты, остаток вернулся
+    assert material_balance(wh, white) == D(0)
+    assert not StockMove.objects.filter(material=white, warehouse=wh).exists()

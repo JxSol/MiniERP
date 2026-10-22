@@ -157,6 +157,20 @@ class DocumentAdmin(PageHelpMixin, HistoryAdmin, ModelAdmin):
             return False
         return super().has_change_permission(request, obj)
 
+    def has_delete_permission(self, request, obj=None):
+        """Проведённый документ не удаляют, а отменяют: иначе остатки разойдутся с историей."""
+        if obj is not None and not isinstance(obj, str) and obj.status == DocumentStatus.POSTED:
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def delete_queryset(self, request, queryset):
+        """Массовое удаление — по одному, чтобы сработало снятие проводок в delete()."""
+        for obj in queryset:
+            if obj.status == DocumentStatus.POSTED:
+                messages.warning(request, f"{obj.number} проведён — сначала отмените его.")
+                continue
+            obj.delete()
+
     def save_model(self, request, obj, form, change):
         if not obj.created_by_id:
             obj.created_by = request.user

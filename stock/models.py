@@ -464,6 +464,13 @@ class StockDocument(models.Model):
     def is_cancelled(self) -> bool:
         return self.status == DocumentStatus.CANCELLED
 
+    @transaction.atomic
+    def delete(self, *args, **kwargs):
+        """Удаление не оставляет проводок-сирот: сначала снимаем движения, как при отмене."""
+        if self._moves_qs().exists():
+            self.cancel()
+        return super().delete(*args, **kwargs)
+
 
 # --- Приход ------------------------------------------------------------------------
 
