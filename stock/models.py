@@ -21,7 +21,16 @@ from django.db.models import Q, Sum
 from django.utils import timezone
 from simple_history.models import HistoricalRecords
 
-from catalog.models import PRODUCTION_KINDS, EnteredUnitMixin, Equipment, Material, MaterialOffer
+from catalog.models import (
+    PRODUCTION_KINDS,
+    EnteredUnitMixin,
+    Equipment,
+    Manufacturer,
+    Material,
+    MaterialForm,
+    MaterialOffer,
+    Supplier,
+)
 from core.models import CodeField, UniqueNameModel, next_code, positive_decimal_field
 from production.models import Coloring, Part, Variant
 from sales.models import Product
@@ -476,67 +485,241 @@ class Receipt(StockDocument):
         ]
 
     def after_post(self):
-        """Фактическая цена закупки попадает в предложение поставщика."""
-        for line in self.lines.select_related("offer"):
-            offer = line.offer
-            if offer is None:
-                continue
-            if offer.pack_price != line.pack_price or offer.pack_size != line.pack_size:
-                offer.pack_price = line.pack_price
-                offer.pack_size = line.pack_size
-                offer._changed_by = self.created_by
-                offer.save()
+        """Закупка создаёт или обновляет предложение поставщика (материал + поставщик + марка)."""
+        for line in self.lines.select_related("material", "supplier", "manufacturer"):
+            line.sync_offer(self.created_by)
+
+
+class EntryMode(models.TextChoices):
+    PACKS = "packs", "Упаковками"
+    DIRECT = "direct", "Напрямую"
 
 
 class ReceiptLine(models.Model):
+    """
+    Строка закупки. Количество вводится упаковками (упаковок × в упаковке) или напрямую
+    (кг, л, листов, пог. м, м, шт); цена — за всё или за упаковку / единицу, второе
+    считается само. В остатки попадает количество в единице расхода материала.
+    """
+
     receipt = models.ForeignKey(Receipt, on_delete=models.CASCADE, related_name="lines")
     material = models.ForeignKey(
         Material, verbose_name="Материал", on_delete=models.PROTECT, related_name="receipt_lines"
+    )
+    supplier = models.ForeignKey(
+        Supplier,
+        verbose_name="Поставщик",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="receipt_lines",
+        help_text="Можно не указывать.",
+    )
+    manufacturer = models.ForeignKey(
+        Manufacturer,
+        verbose_name="Производитель",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="receipt_lines",
+        help_text="Можно не указывать.",
+    )
+    mode = models.CharField(
+        "Как считаем",
+        max_length=6,
+        choices=EntryMode.choices,
+        default=EntryMode.PACKS,
+        help_text="Упаковками: упаковок × сколько в упаковке. Напрямую: сразу количество "
+        "в кг, листах, метрах или штуках.",
+    )
+    packs = models.PositiveIntegerField(
+        "Упаковок",
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1)],
+        help_text="Целое число катушек, рулонов, пачек, коробок.",
+    )
+    pack_size = positive_decimal_field(
+        "В упаковке",
+        null=True,
+        blank=True,
+        help_text="В единице материала: граммов в катушке, листов в пачке, метров в рулоне, "
+        "штук в коробке. Подставляется из прошлой закупки у этого поставщика.",
+    )
+    quantity_entered = positive_decimal_field(
+        "Количество",
+        null=True,
+        blank=True,
+        help_text="Для «напрямую»: кг, л, листов, пог. м, м или шт — по материалу.",
+    )
+    pack_price = models.DecimalField(
+        "Цена за упаковку / единицу, ₸",
+        max_digits=14,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.01"))],
+        help_text="Или заполните «Сумму» — второе пересчитается само.",
+    )
+    total_price = models.DecimalField(
+        "Сумма, ₸",
+        max_digits=14,
+        decimal_places=2,
+        default=Decimal(0),
+        validators=[MinValueValidator(Decimal("0.01"))],  # бесплатное — через «Оприходование»
+        help_text="За все упаковки или за всё количество.",
+    )
+    quantity = models.DecimalField(
+        "Количество в единице расхода",
+        max_digits=14,
+        decimal_places=4,
+        default=Decimal(0),
+        editable=False,
     )
     offer = models.ForeignKey(
         MaterialOffer,
         verbose_name="Предложение поставщика",
         null=True,
         blank=True,
-        on_delete=models.PROTECT,
+        editable=False,
+        on_delete=models.SET_NULL,
         related_name="receipt_lines",
-        help_text="У кого купили. Цена из этой строки обновит предложение.",
-    )
-    packs = positive_decimal_field("Упаковок", help_text="Сколько катушек, листов, пачек.")
-    pack_size = positive_decimal_field(
-        "В упаковке", help_text="Единиц расхода в одной упаковке. Подставляется из предложения."
-    )
-    pack_price = models.DecimalField(
-        "Цена упаковки, ₸",
-        max_digits=14,
-        decimal_places=2,
-        validators=[MinValueValidator(Decimal("0.01"))],  # бесплатное — через «Оприходование»
     )
 
     class Meta:
-        verbose_name = "Строка прихода"
+        verbose_name = "Строка закупки"
         verbose_name_plural = "Позиции закупки"
 
     def __str__(self):
-        from core.admin_utils import fmt_number
-
-        return (
-            f"{self.material}: {fmt_number(self.packs)} уп. × "
-            f"{self.material.format_qty(self.pack_size)}"
-        )
+        return f"{self.material}: {self.summary()}"
 
     @property
-    def quantity(self) -> Decimal:
-        return (self.packs * self.pack_size).quantize(Decimal("0.0001"))
+    def count(self) -> Decimal:
+        """Сколько упаковок или единиц ввода — база для цены за упаковку / единицу."""
+        if self.mode == EntryMode.PACKS:
+            return Decimal(self.packs or 0)
+        return Decimal(self.quantity_entered or 0)
+
+    @property
+    def unit_price(self) -> Decimal | None:
+        """Цена за единицу расхода: сумма / количество."""
+        return self.total_price / self.quantity if self.quantity else None
 
     @property
     def total(self) -> Decimal:
-        return (self.packs * self.pack_price).quantize(Decimal("0.01"))
+        return self.total_price
+
+    def matching_offer(self):
+        return MaterialOffer.objects.filter(
+            material_id=self.material_id,
+            supplier_id=self.supplier_id,
+            manufacturer_id=self.manufacturer_id,
+        ).first()
+
+    def compute(self) -> None:
+        """Считает количество в единице расхода и недостающее из пары «сумма / цена»."""
+        from core.admin_utils import fmt_money, fmt_number
+
+        material = self.material
+        label, factor = material.direct_unit
+        offer = self.matching_offer()
+        if self.mode == EntryMode.PACKS:
+            if not self.pack_size:
+                if offer:
+                    self.pack_size = offer.pack_size
+                elif material.form_type == MaterialForm.ROLL and material.roll_length_m:
+                    self.pack_size = material.roll_length_m
+            if not self.packs or not self.pack_size:
+                raise ValidationError({"packs": "Укажите число упаковок и сколько в упаковке."})
+            count = Decimal(self.packs)
+            quantity = count * self.pack_size
+        else:
+            if not self.quantity_entered:
+                raise ValidationError({"quantity_entered": f"Укажите количество в {label}."})
+            count = Decimal(self.quantity_entered)
+            quantity = count * factor
+        self.quantity = quantity.quantize(Decimal("0.0001"))
+        if self.quantity <= 0:
+            raise ValidationError({"quantity_entered": "Количество получается нулевым."})
+        same_pack = self.mode == EntryMode.PACKS and offer and offer.pack_size == self.pack_size
+        if not self.pack_price and not self.total_price and same_pack:
+            self.pack_price = offer.pack_price  # цена прошлой закупки у этого поставщика
+        if self.pack_price and self.total_price:
+            expected = (self.pack_price * count).quantize(Decimal("0.01"))
+            if abs(expected - self.total_price) > Decimal(1):
+                raise ValidationError(
+                    {
+                        "total_price": f"Сумма не сходится с ценой: {fmt_number(count)} × "
+                        f"{fmt_money(self.pack_price)} = {fmt_money(expected)}. Исправьте "
+                        "одно из полей или очистите его, чтобы пересчитать."
+                    }
+                )
+        elif self.pack_price:
+            self.total_price = (self.pack_price * count).quantize(Decimal("0.01"))
+        elif self.total_price:
+            self.pack_price = (self.total_price / count).quantize(Decimal("0.01"))
+        else:
+            raise ValidationError(
+                {"total_price": "Укажите сумму за всё или цену за упаковку / единицу."}
+            )
+        if self.total_price <= 0:
+            raise ValidationError(
+                {
+                    "total_price": "Цена должна быть больше нуля: бесплатное поступление "
+                    "оформляется документом «Оприходование»."
+                }
+            )
 
     def clean(self):
         super().clean()
-        if self.offer_id and self.material_id and self.offer.material_id != self.material_id:
-            raise ValidationError({"offer": "Предложение относится к другому материалу."})
+        if self.material_id:
+            self.compute()
+
+    def save(self, *args, **kwargs):
+        self.compute()
+        super().save(*args, **kwargs)
+
+    def summary(self) -> str:
+        """«5 уп. × 100 пог. м = 500 пог. м (600 м²); 30 000 ₸ (60 ₸/пог. м · 50 ₸/м²)»."""
+        from core.admin_utils import fmt_money, fmt_number, fmt_price
+
+        material = self.material
+        qty = material.format_qty(self.quantity)
+        if self.mode == EntryMode.PACKS:
+            how = f"{self.packs} уп. × {material.format_qty(self.pack_size)} = {qty}"
+        else:
+            label, factor = material.direct_unit
+            how = f"{fmt_number(self.quantity_entered)} {label}"
+            if factor != 1 or material.alt_quantity(self.quantity):
+                how += f" = {qty}"
+        prices = material.price_breakdown(self.unit_price) if self.quantity else []
+        price_text = " · ".join(f"{fmt_price(p)}/{u}" for p, u in prices)
+        return f"{how}; {fmt_money(self.total_price, 0)}" + (
+            f" ({price_text})" if price_text else ""
+        )
+
+    def sync_offer(self, user=None) -> None:
+        """После проведения предложение (материал + поставщик + марка) получает упаковку и цену."""
+        if self.mode == EntryMode.PACKS:
+            pack_size, pack_price = self.pack_size, self.pack_price
+        else:
+            _, factor = self.material.direct_unit
+            pack_size, pack_price = factor, self.pack_price  # «1 кг за 3 600 ₸»
+        offer = self.matching_offer() or MaterialOffer(
+            material=self.material, supplier=self.supplier, manufacturer=self.manufacturer
+        )
+        changed = (
+            offer.pk is None
+            or offer.pack_size != pack_size
+            or offer.pack_price != pack_price
+            or not offer.is_active
+        )
+        if changed:
+            offer.pack_size, offer.pack_price, offer.is_active = pack_size, pack_price, True
+            offer._changed_by = user
+            offer.save()
+        if self.offer_id != offer.pk:
+            type(self).objects.filter(pk=self.pk).update(offer=offer)
 
 
 # --- Выпуск деталей ----------------------------------------------------------------

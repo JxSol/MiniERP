@@ -75,7 +75,7 @@ def _material(
         material=material,
         manufacturer=Manufacturer.objects.filter(name=maker).first() if maker else None,
         supplier=Supplier.objects.filter(name=shop).first() if shop else None,
-        pack_size=D(pack_size) if pack_size is not None else material.roll_area_m2,
+        pack_size=D(pack_size) if pack_size is not None else material.roll_length_m,
         pack_price=D(pack_price),
     )
     return material
@@ -135,7 +135,7 @@ def load_demo() -> dict:
     big_box = _material(
         "Коробка 40×30×30", "Фирменная", Unit.PIECE, 1, 900, width=40, length=30, height=30, **piece
     )
-    # рулон: 1 рулон = 1,2 м × 100 м = 120 м² за 6 000 ₸ → 50 ₸/м², 60 ₸/пог. м
+    # рулон: 1 рулон = 100 пог. м (1,2 м × 100 м = 120 м²) за 6 000 ₸ → 60 ₸/пог. м, 50 ₸/м²
     _material(
         "ВПП плёнка 120 см",
         "Транспортная",
@@ -278,32 +278,28 @@ def load_demo_stock() -> None:
     showcase = Warehouse.objects.create(name="Магазин — витрина", order=2, is_showcase=True)
 
     receipt = Receipt.objects.create(warehouse=workshop, notes="первая закупка")
+
+    def buy(material, packs):
+        """Упаковками по прошлому предложению поставщика: сумма и количество считаются сами."""
+        offer = material.offers.get()
+        ReceiptLine.objects.create(
+            receipt=receipt,
+            material=material,
+            supplier=offer.supplier,
+            manufacturer=offer.manufacturer,
+            packs=packs,
+            pack_size=offer.pack_size,
+            pack_price=offer.pack_price,
+        )
+
     for name, color, packs in (
         ("PLA Basic", "Белый", 3),
         ("PLA Basic", "Чёрный", 1),
         ("PLA Silk", "Золотой", 1),
     ):
-        material = Material.objects.get(name=name, color__name=color)
-        offer = material.offers.get()
-        ReceiptLine.objects.create(
-            receipt=receipt,
-            material=material,
-            offer=offer,
-            packs=D(packs),
-            pack_size=offer.pack_size,
-            pack_price=offer.pack_price,
-        )
+        buy(Material.objects.get(name=name, color__name=color), packs)
     for name, packs in (("ВПП плёнка 120 см", 5), ("Плёнка упаковочная 58×58 см", 1)):
-        material = Material.objects.get(name=name)
-        offer = material.offers.get()
-        ReceiptLine.objects.create(
-            receipt=receipt,
-            material=material,
-            offer=offer,
-            packs=D(packs),
-            pack_size=offer.pack_size,
-            pack_price=offer.pack_price,
-        )
+        buy(Material.objects.get(name=name), packs)
     receipt.post()
 
     inventory = Inventory.objects.create(

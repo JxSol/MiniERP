@@ -8,9 +8,10 @@ from decimal import Decimal
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin import SimpleListFilter
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
-from django.urls import reverse
+from django.urls import path, reverse
 from django.utils.html import format_html, format_html_join
 from django.utils.http import urlencode
 from django.utils.safestring import mark_safe
@@ -19,12 +20,11 @@ from unfold.decorators import action, display
 from unfold.views import ChangeList
 from unfold.widgets import UnfoldAdminSelectWidget
 
+from catalog.models import Material, MaterialForm, Unit
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
 from core.admin_utils import (
     PageHelpMixin,
     fmt_money,
-    fmt_number,
-    fmt_price,
     fmt_quantity,
     hx_redirect,
 )
@@ -211,85 +211,125 @@ class DocumentAdmin(PageHelpMixin, HistoryAdmin, ModelAdmin):
 class ReceiptLineForm(ActiveChoicesForm):
     class Meta:
         model = ReceiptLine
-        fields = ("material", "offer", "packs", "pack_size", "pack_price")
+        fields = (
+            "material",
+            "supplier",
+            "manufacturer",
+            "mode",
+            "packs",
+            "pack_size",
+            "quantity_entered",
+            "pack_price",
+            "total_price",
+        )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["pack_size"].required = False
-        self.fields["pack_price"].required = False
-        self.fields["offer"].queryset = self.fields["offer"].queryset.select_related(
-            "material__color", "manufacturer", "supplier"
-        )
-
-    def clean(self):
-        data = super().clean()
-        offer = data.get("offer")
-        material = data.get("material")
-        if offer and not data.get("pack_size"):
-            data["pack_size"] = offer.pack_size
-        if offer and data.get("pack_price") is None:
-            data["pack_price"] = offer.pack_price
-        if not data.get("pack_size") and material is not None and material.roll_area_m2:
-            data["pack_size"] = material.roll_area_m2  # рулон: упаковка = площадь рулона
-        if not data.get("pack_size"):
-            self.add_error(
-                "pack_size", "Укажите, сколько единиц в упаковке, или выберите предложение."
-            )
-        if data.get("pack_price") is None:
-            self.add_error("pack_price", "Укажите цену упаковки или выберите предложение.")
-        elif data["pack_price"] <= 0:
-            self.add_error(
-                "pack_price",
-                "Цена должна быть больше нуля: бесплатное поступление оформляется "
-                "документом «Оприходование».",
-            )
-        return data
+        self.fields["total_price"].required = False
+        self.fields["pack_price"].label = "Цена за уп. / ед., ₸"
 
 
 class ReceiptLineInline(LineInline):
     model = ReceiptLine
     form = ReceiptLineForm
-    autocomplete_fields = ("material",)
+    autocomplete_fields = ("material", "supplier", "manufacturer")
     fields = (
         "material",
-        "offer",
+        "supplier",
+        "manufacturer",
+        "mode",
         "packs",
         "pack_size",
+        "quantity_entered",
         "pack_price",
-        "quantity_display",
-        "unit_price_display",
-        "total_display",
+        "total_price",
+        "summary_display",
     )
-    readonly_fields = ("quantity_display", "unit_price_display", "total_display")
+    readonly_fields = ("summary_display",)
     min_num = 1
     verbose_name_plural = "Позиции"
 
-    @display(description="Итого единиц")
-    def quantity_display(self, obj):
-        return obj.material.format_qty(obj.quantity) if obj.pk else "—"
+    class Media:
+        # после jquery.init.js, чтобы был доступен django.jQuery
+        js = (
+            "admin/js/vendor/jquery/jquery.js",
+            "admin/js/jquery.init.js",
+            "stock/receipt_line.js",
+        )
 
-    @display(description="Цена за единицу")
-    def unit_price_display(self, obj):
-        if not obj.pk or not obj.pack_size:
-            return "—"
-        parts = obj.material.price_breakdown(obj.pack_price / obj.pack_size)
-        return " · ".join(f"{fmt_price(p)}/{u}" for p, u in parts)
-
-    @display(description="Сумма")
-    def total_display(self, obj):
-        return fmt_money(obj.total, 0) if obj.pk else "—"
+    @display(description="Итого")
+    def summary_display(self, obj):
+        return obj.summary() if obj.pk else "—"
 
 
 @admin.register(Receipt)
 class ReceiptAdmin(DocumentAdmin):
-    list_display = ("number", "date", "warehouse", "lines_display", "status_badge", "created_by")
-    search_fields = ("number", "lines__material__name")
+    list_display = (
+        "number",
+        "date",
+        "warehouse",
+        "lines_display",
+        "total_display",
+        "status_badge",
+        "created_by",
+    )
+    search_fields = ("number", "lines__material__name", "lines__supplier__name")
     inlines = (ReceiptLineInline,)
     fields = ("number", "date", "warehouse", "status_display", "notes", "created_by", "posted_at")
 
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("lines__material__color")
+
+    def get_urls(self):
+        info = path(
+            "material-info/<int:pk>/",
+            self.admin_site.admin_view(self.material_info),
+            name="stock_receipt_material_info",
+        )
+        return [info, *super().get_urls()]
+
+    def material_info(self, request, pk):
+        """Данные материала для живого пересчёта строки закупки (JS)."""
+        material = get_object_or_404(Material.objects.select_related("color"), pk=pk)
+        label, factor = material.direct_unit
+        alt = material.alt_factor()
+        offers = [
+            {
+                "supplier": o.supplier_id,
+                "manufacturer": o.manufacturer_id,
+                "pack_size": f"{o.pack_size.normalize():f}",
+                "pack_price": f"{o.pack_price.normalize():f}",
+            }
+            for o in material.offers.filter(is_active=True)
+        ]
+        if material.form_type == MaterialForm.ROLL and material.roll_length_m:
+            default_pack = f"{material.roll_length_m.normalize():f}"
+        else:
+            default_pack = offers[0]["pack_size"] if offers else None
+        by_packs = material.unit in (Unit.GRAM, Unit.ML) or material.form_type == MaterialForm.ROLL
+        return JsonResponse(
+            {
+                "unit": material.get_unit_display(),
+                "direct_unit": label,
+                "factor": f"{factor:f}",
+                "alt_unit": alt[1] if alt else None,
+                "alt_factor": f"{alt[0]:f}" if alt else None,
+                "default_pack_size": default_pack,
+                "default_mode": "packs" if by_packs else "direct",
+                "offers": offers,
+            }
+        )
+
     @display(description="Позиции")
     def lines_display(self, obj):
-        return "; ".join(f"{line.material} × {fmt_number(line.packs)}" for line in obj.lines.all())
+        return "; ".join(
+            f"{line.material}: {line.material.format_qty(line.quantity)}"
+            for line in obj.lines.all()
+        )
+
+    @display(description="Сумма")
+    def total_display(self, obj):
+        return fmt_money(sum((line.total_price for line in obj.lines.all()), ZERO), 0)
 
 
 # --- Выпуск деталей ----------------------------------------------------------------

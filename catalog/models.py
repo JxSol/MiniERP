@@ -42,6 +42,7 @@ class Unit(models.TextChoices):
     METER = "m", "м"
     SQ_METER = "m2", "м²"
     SHEET = "sheet", "лист"
+    LINEAR_METER = "lm", "пог. м"
 
 
 class Technology(models.TextChoices):
@@ -185,7 +186,7 @@ class MaterialForm(models.TextChoices):
 FORM_UNITS = {
     MaterialForm.PIECE: Unit.PIECE,
     MaterialForm.SHEET: Unit.SHEET,
-    MaterialForm.ROLL: Unit.SQ_METER,
+    MaterialForm.ROLL: Unit.LINEAR_METER,
     MaterialForm.LENGTH: Unit.METER,
 }
 
@@ -419,27 +420,31 @@ class Material(UniqueNameModel):
 
     def alt_units(self) -> list[str]:
         """В каких единицах, кроме единицы расхода, можно вводить количество."""
-        if self.form_type == MaterialForm.SHEET:
+        if self.form_type in (MaterialForm.SHEET, MaterialForm.ROLL):
             return [QtyUnit.SQ_METER]
-        if self.form_type == MaterialForm.ROLL:
-            return [QtyUnit.LINEAR_METER]
         return []
+
+    def _per_m2(self) -> Decimal | None:
+        """Сколько единиц расхода в одном м²: лист → 1 / площадь листа, рулон → 1 / ширина."""
+        if self.form_type == MaterialForm.SHEET and self.sheet_area_m2:
+            return Decimal(1) / self.sheet_area_m2
+        if self.form_type == MaterialForm.ROLL and self.width_m:
+            return Decimal(1) / self.width_m
+        return None
 
     def to_base(self, quantity: Decimal, unit: str = "") -> Decimal:
         """Введённое количество → единица расхода. unit пустой или равный единице — как есть."""
         if not unit or unit == self.unit:
             return quantity
-        if self.form_type == MaterialForm.SHEET and unit == QtyUnit.SQ_METER:
-            if not self.sheet_area_m2:
-                raise ValidationError("Укажите размеры листа в карточке материала.")
-            result = (Decimal(quantity) / self.sheet_area_m2).quantize(Decimal("0.0001"))
-        elif self.form_type == MaterialForm.ROLL and unit == QtyUnit.LINEAR_METER:
-            if not self.width_m:
-                raise ValidationError("Укажите ширину рулона в карточке материала.")
-            result = (Decimal(quantity) * self.width_m).quantize(Decimal("0.0001"))
-        else:
-            result = None
-        if result is not None:
+        if unit == QtyUnit.SQ_METER and self.form_type in (MaterialForm.SHEET, MaterialForm.ROLL):
+            per_m2 = self._per_m2()
+            if per_m2 is None:
+                raise ValidationError(
+                    "Укажите размеры листа в карточке материала."
+                    if self.form_type == MaterialForm.SHEET
+                    else "Укажите ширину рулона в карточке материала."
+                )
+            result = (Decimal(quantity) * per_m2).quantize(Decimal("0.0001"))
             if result <= 0:
                 raise ValidationError(
                     f"После перевода в {self.get_unit_display()} получается 0 — укажите "
@@ -455,26 +460,41 @@ class Material(UniqueNameModel):
         """Единица расхода → единица ввода (обратно к to_base)."""
         if not unit or unit == self.unit:
             return quantity
-        if self.form_type == MaterialForm.SHEET and unit == QtyUnit.SQ_METER and self.sheet_area_m2:
-            return (Decimal(quantity) * self.sheet_area_m2).quantize(Decimal("0.0001"))
-        if self.form_type == MaterialForm.ROLL and unit == QtyUnit.LINEAR_METER and self.width_m:
-            return (Decimal(quantity) / self.width_m).quantize(Decimal("0.0001"))
+        per_m2 = self._per_m2()
+        if unit == QtyUnit.SQ_METER and per_m2:
+            return (Decimal(quantity) / per_m2).quantize(Decimal("0.0001"))
         return quantity
 
-    def alt_quantity(self, quantity: Decimal) -> tuple[Decimal, str] | None:
-        """Эквивалент количества во второй единице: лист → м², м² → пог. м, шт → м³."""
-        if quantity is None:
-            return None
-        if self.sheet_area_m2:
-            return (Decimal(quantity) * self.sheet_area_m2).quantize(Decimal("0.0001")), "м²"
-        if self.form_type == MaterialForm.ROLL and self.width_m:
-            return (Decimal(quantity) / self.width_m).quantize(Decimal("0.0001")), "пог. м"
+    def alt_factor(self) -> tuple[Decimal, str] | None:
+        """Множитель «единица расхода → вторая единица»: лист → м², пог. м → м², шт → м³."""
+        per_m2 = self._per_m2()
+        if per_m2:
+            return Decimal(1) / per_m2, "м²"
         if self.piece_volume_m3:
-            return (Decimal(quantity) * self.piece_volume_m3).quantize(Decimal("0.0001")), "м³"
+            return self.piece_volume_m3, "м³"
         return None
 
+    def alt_quantity(self, quantity: Decimal) -> tuple[Decimal, str] | None:
+        """Эквивалент количества во второй единице: лист → м², пог. м → м², шт → м³."""
+        if quantity is None:
+            return None
+        alt = self.alt_factor()
+        if alt is None:
+            return None
+        factor, label = alt
+        return (Decimal(quantity) * factor).quantize(Decimal("0.0001")), label
+
+    @property
+    def direct_unit(self) -> tuple[str, Decimal]:
+        """Единица ввода «напрямую» в закупке и сколько в ней единиц расхода: кг → 1000 г."""
+        if self.unit == Unit.GRAM:
+            return "кг", Decimal(1000)
+        if self.unit == Unit.ML:
+            return "л", Decimal(1000)
+        return self.get_unit_display(), Decimal(1)
+
     def format_qty(self, quantity: Decimal | None) -> str:
-        """«10 лист (3,364 м²)», «600 м² (500 пог. м)», «10 шт (0,9 м³)»."""
+        """«10 лист (3,364 м²)», «500 пог. м (600 м²)», «10 шт (0,9 м³)»."""
         from core.admin_utils import fmt_quantity
 
         base = fmt_quantity(quantity, self.get_unit_display())
@@ -482,7 +502,7 @@ class Material(UniqueNameModel):
         return f"{base} ({fmt_quantity(*alt)})" if alt else base
 
     def format_entered(self, quantity: Decimal, unit: str = "") -> str:
-        """Как ввели + в единице расхода: «50 пог. м (60 м²)»."""
+        """Как ввели + в единице расхода: «60 м² (50 пог. м)»."""
         from core.admin_utils import fmt_quantity
 
         if unit and unit != self.unit:
@@ -491,14 +511,13 @@ class Material(UniqueNameModel):
         return self.format_qty(quantity)
 
     def price_breakdown(self, unit_price: Decimal | None) -> list[tuple[Decimal, str]]:
-        """Цена за единицу расхода и производные: ₸/лист + ₸/м², ₸/м² + ₸/пог. м, ₸/шт + ₸/м³."""
+        """Цена за единицу расхода и производная: ₸/лист + ₸/м², ₸/пог. м + ₸/м², ₸/шт + ₸/м³."""
         if unit_price is None:
             return []
         result = [(unit_price, self.get_unit_display())]
-        if self.sheet_area_m2:
-            result.append((unit_price / self.sheet_area_m2, "м²"))
-        elif self.form_type == MaterialForm.ROLL and self.width_m:
-            result.append((unit_price * self.width_m, "пог. м"))
+        per_m2 = self._per_m2()
+        if per_m2:
+            result.append((unit_price * per_m2, "м²"))
         elif self.piece_volume_m3:
             result.append((unit_price / self.piece_volume_m3, "м³"))
         return result
@@ -535,8 +554,8 @@ class MaterialOffer(models.Model):
     pack_size = positive_decimal_field(
         "Упаковка",
         help_text="Сколько единиц расхода в одной упаковке: катушка 1000 г → 1000; 10 шт → 10; "
-        "пачка 10 листов → 10; бухта кабеля 100 м → 100. Для рулона подставляется площадь "
-        "рулона в м².",
+        "пачка 10 листов → 10; бухта кабеля 100 м → 100. Для рулона подставляется длина "
+        "рулона в пог. м.",
     )
     pack_price = money_field(
         "Цена упаковки, ₸",

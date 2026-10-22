@@ -91,27 +91,39 @@ def test_receipt_adds_stock_and_updates_offer_price(demo):
     white = mat("PLA Basic", "Белый")
     offer = white.offers.get()
     receipt = Receipt.objects.create(warehouse=wh)
-    ReceiptLine.objects.create(
+    line = ReceiptLine.objects.create(
         receipt=receipt,
         material=white,
-        offer=offer,
-        packs=D(2),
+        supplier=offer.supplier,
+        manufacturer=offer.manufacturer,
+        packs=2,
         pack_size=D(1000),
         pack_price=D(9500),
     )
+    assert line.quantity == D(2000) and line.total_price == D(19000)  # посчиталось при сохранении
     receipt.post()
     receipt.refresh_from_db()
     assert receipt.status == DocumentStatus.POSTED and receipt.number.startswith("BUY-")
     assert material_balance(wh, white) == D(2000)
     offer.refresh_from_db()
-    assert offer.pack_price == D(9500)
+    assert offer.pack_price == D(9500)  # закупка обновила предложение этого поставщика
     assert offer.price_history.count() == 2
+    line.refresh_from_db()
+    assert line.offer == offer
     # повторное проведение не удваивает остаток
     receipt.post()
     assert material_balance(wh, white) == D(2000)
 
-
-# --- Выпуск деталей ---
+    # напрямую, в килограммах, без поставщика: сумма за всё → цена за кг, новое предложение
+    bulk = Receipt.objects.create(warehouse=wh)
+    line = ReceiptLine.objects.create(
+        receipt=bulk, material=white, mode="direct", quantity_entered=D("2.5"), total_price=D(9000)
+    )
+    assert line.quantity == D(2500) and line.pack_price == D(3600)
+    bulk.post()
+    assert material_balance(wh, white) == D(4500)
+    created = white.offers.get(supplier=None, manufacturer=None)
+    assert created.pack_size == D(1000) and created.pack_price == D(3600)  # «1 кг за 3 600 ₸»
 
 
 def test_production_run_consumes_material_incl_scrap(demo):

@@ -25,6 +25,7 @@ from .models import (
     Manufacturer,
     Material,
     MaterialCategory,
+    MaterialForm,
     MaterialOffer,
     MaterialPriceHistory,
     OperationType,
@@ -139,9 +140,9 @@ class MaterialOfferForm(ActiveChoicesForm):
         data = super().clean()
         if not data.get("pack_size"):
             material = getattr(self.instance, "material", None)
-            roll_area = material.roll_area_m2 if material is not None else None
-            if roll_area:
-                data["pack_size"] = roll_area
+            is_roll = material is not None and material.form_type == MaterialForm.ROLL
+            if is_roll and material.roll_length_m:
+                data["pack_size"] = material.roll_length_m  # рулон: упаковка = его длина
             else:
                 self.add_error("pack_size", "Укажите, сколько единиц расхода в упаковке.")
         return data

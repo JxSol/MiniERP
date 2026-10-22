@@ -78,16 +78,22 @@ def test_receipt_and_run_posted_from_admin_forms(client, demo):
             "lines-INITIAL_FORMS": "0",
             "lines-MIN_NUM_FORMS": "1",
             "lines-0-material": white.pk,
-            "lines-0-offer": offer.pk,
+            "lines-0-supplier": offer.supplier_id,
+            "lines-0-manufacturer": offer.manufacturer_id,
+            "lines-0-mode": "packs",
             "lines-0-packs": "2",
             "lines-0-pack_size": "",
+            "lines-0-quantity_entered": "",
             "lines-0-pack_price": "",
+            "lines-0-total_price": "",
         },
     )
     assert response.status_code == 302, response.content.decode()[:800]
     receipt = Receipt.objects.get(warehouse=wh)
     assert receipt.status == DocumentStatus.POSTED and receipt.created_by.username == "tech"
-    assert receipt.lines.get().pack_size == D(1000)  # подставилось из предложения
+    line = receipt.lines.get()
+    assert line.pack_size == D(1000) and line.pack_price == D(9000)  # из прошлой закупки
+    assert line.total_price == D(18000)
     assert balance_of(wh.pk, (ItemKind.MATERIAL, white.pk, None)) == D(2000)
 
     shade = Part.objects.get(name="Плафон Луна")
@@ -204,11 +210,11 @@ def test_balance_and_move_cards_show_units_and_history(client, admin_user, demo)
     html = client.get(
         reverse("admin:stock_stockbalance_change", args=[balance.pk])
     ).content.decode()
-    assert f"600{NBSP}м² (500{NBSP}пог. м)" in html
+    assert f"500{NBSP}пог. м (600{NBSP}м²)" in html
     assert "Последние движения" in html and "BUY-" in html
     assert "600,0000" not in html and "Материал детали" not in html
     assert chr(34).join(["title=", "Что это за поле", ""]) in html  # значок «i» с пояснением
     move = StockMove.objects.filter(material=bubble).first()
     page = client.get(reverse("admin:stock_stockmove_change", args=[move.pk])).content.decode()
-    assert "Документ" in page and f"+600{NBSP}м²" in page
-    assert str(balance).endswith(f"Цех: 600{NBSP}м² (500{NBSP}пог. м)")
+    assert "Документ" in page and f"+500{NBSP}пог. м" in page
+    assert str(balance).endswith(f"Цех: 500{NBSP}пог. м (600{NBSP}м²)")
