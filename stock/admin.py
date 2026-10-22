@@ -227,6 +227,8 @@ class ReceiptLineForm(ActiveChoicesForm):
         super().__init__(*args, **kwargs)
         self.fields["total_price"].required = False
         self.fields["pack_price"].label = "Цена за уп. / ед., ₸"
+        if not self.instance.pk:
+            self.initial["total_price"] = None  # в новой строке не показывать «0»
 
 
 class ReceiptLineInline(LineInline):
