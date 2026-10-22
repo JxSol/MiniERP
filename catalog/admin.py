@@ -172,9 +172,28 @@ def price_text(material, unit_price) -> str:
 class PriceHistoryInline(LineInline):
     model = MaterialPriceHistory
     can_delete = False
-    fields = ("changed_at", "offer", "pack_size", "pack_price", "unit_price_display", "changed_by")
+    fields = (
+        "changed_at",
+        "offer_display",
+        "pack_display",
+        "pack_price_display",
+        "unit_price_display",
+        "changed_by",
+    )
     readonly_fields = fields
     verbose_name_plural = "История цен"
+
+    @display(description="Предложение")
+    def offer_display(self, obj):
+        return str(obj.offer)
+
+    @display(description="Упаковка")
+    def pack_display(self, obj):
+        return obj.material.format_qty(obj.pack_size)
+
+    @display(description="Цена упаковки")
+    def pack_price_display(self, obj):
+        return fmt_money(obj.pack_price, 0)
 
     def has_add_permission(self, request, obj=None):
         return False
@@ -283,25 +302,29 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
     @display(description="Расчёт по размерам")
     def size_display(self, obj):
         """Площадь, объём, площадь рулона; пересчитывается на лету из полей формы (Alpine)."""
-        area = obj.sheet_area_m2 or Decimal(0)
-        volume = obj.piece_volume_m3 or Decimal(0)
-        roll = obj.roll_area_m2 or Decimal(0)
+        js = "((n) => n.toFixed(4).replace(/(\\.\\d*?)0+$/, '$1').replace(/\\.$/, '').replace('.', ','))"
+        area = "((+width_cm || 0) * (+length_cm || 0)) / 10000"
+        volume = "((+width_cm || 0) * (+length_cm || 0) * (+height_cm || 0)) / 1000000"
+        roll = "((+width_cm || 0) / 100) * (+roll_length_m || 0)"
+        vol = obj.piece_volume_m3 or Decimal(0)
         return format_html(
             "<div x-show=\"form_type === 'sheet'\">Площадь листа: "
-            "<b x-text=\"(((+width_cm || 0) * (+length_cm || 0)) / 10000).toFixed(4).replace('.', ',')\">{}</b> м²</div>"
+            '<b x-text="{js}({area})">{a}</b> м²</div>'
             "<div x-show=\"form_type === 'piece'\">Объём: "
-            "<b x-text=\"(((+width_cm || 0) * (+length_cm || 0) * (+height_cm || 0)) / 1000000).toFixed(4).replace('.', ',')\">{}</b> м³ "
-            "(<b x-text=\"(((+width_cm || 0) * (+length_cm || 0) * (+height_cm || 0)) / 1000).toFixed(1).replace('.', ',')\">{}</b> л)</div>"
+            '<b x-text="{js}({volume})">{v}</b> м³ (<b x-text="{js}({volume} * 1000)">{l}</b> л)</div>'
             "<div x-show=\"form_type === 'roll'\">Рулон: "
-            "<b x-text=\"(((+width_cm || 0) / 100) * (+roll_length_m || 0)).toFixed(2).replace('.', ',')\">{}</b> м² "
-            "= <b x-text=\"(+roll_length_m || 0).toString().replace('.', ',')\">{}</b> пог. м</div>"
+            '<b x-text="{js}({roll})">{r}</b> м² = <b x-text="{js}(+roll_length_m || 0)">{rl}</b> пог. м</div>'
             "<div x-show=\"form_type === 'plain' || form_type === 'length'\" class=\"text-base-500\">"
             "Размеры не нужны</div>",
-            f"{area:.4f}".replace(".", ","),
-            f"{volume:.4f}".replace(".", ","),
-            f"{volume * 1000:.1f}".replace(".", ","),
-            f"{roll:.2f}".replace(".", ","),
-            f"{obj.roll_length_m or 0:f}".replace(".", ","),
+            js=js,
+            area=area,
+            volume=volume,
+            roll=roll,
+            a=fmt_number(obj.sheet_area_m2 or 0),
+            v=fmt_number(vol),
+            l=fmt_number(vol * 1000),
+            r=fmt_number(obj.roll_area_m2 or 0),
+            rl=fmt_number(obj.roll_length_m or 0),
         )
 
     @display(description="Предложения")

@@ -55,8 +55,7 @@ def fmt_quantity(value: Decimal | None, unit: str = "шт") -> str:
         value, unit = (value / 1000).quantize(Decimal("0.001")), "кг"
     elif unit == "мл" and abs(value) >= 1000:
         value, unit = (value / 1000).quantize(Decimal("0.001")), "л"
-    text = f"{value.normalize():,f}".replace(",", " ").replace(".", ",")
-    return f"{text} {unit}"
+    return f"{fmt_number(value)} {unit}"
 
 
 def fmt_duration(minutes: Decimal | None) -> str:
@@ -74,10 +73,12 @@ def fmt_duration(minutes: Decimal | None) -> str:
 
 
 def fmt_number(value: Decimal | None) -> str:
+    """Число без лишних нулей, не больше 4 знаков после запятой, разряды через неразрывный пробел."""
     if value is None:
         return "—"
-    text = f"{Decimal(value).normalize():f}"
-    return text.replace(".", ",")
+    quantized = Decimal(value).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    text = f"{quantized.normalize():,f}"
+    return text.replace(",", " ").replace(".", ",")
 
 
 def color_swatch(hex_value: str, title: str = "") -> str:

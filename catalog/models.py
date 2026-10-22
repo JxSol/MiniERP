@@ -548,7 +548,10 @@ class MaterialOffer(models.Model):
 
     def __str__(self):
         who = " · ".join(str(x) for x in (self.manufacturer, self.supplier) if x)
-        return f"{who or 'без поставщика'}: {self.pack_size:f} за {self.pack_price} ₸"
+        from core.admin_utils import fmt_money
+
+        pack = self.material.format_qty(self.pack_size)
+        return f"{who or 'без поставщика'} — {pack} за {fmt_money(self.pack_price, 0)}"
 
     @property
     def unit_price(self) -> Decimal:
@@ -597,7 +600,12 @@ class MaterialPriceHistory(models.Model):
         ordering = ["-changed_at"]
 
     def __str__(self):
-        return f"{self.material}: {self.pack_price} ₸ от {self.changed_at:%d.%m.%Y}"
+        from core.admin_utils import fmt_money
+
+        return (
+            f"{self.material}: {self.material.format_qty(self.pack_size)} за "
+            f"{fmt_money(self.pack_price, 0)} от {self.changed_at:%d.%m.%Y}"
+        )
 
     def save(self, *args, **kwargs):
         if self.pk:

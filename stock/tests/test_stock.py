@@ -36,6 +36,8 @@ from stock.reports import fact_scrap_percent, low_stock_materials, totals_by_ite
 
 pytestmark = pytest.mark.django_db
 
+NBSP = " "
+
 
 @pytest.fixture
 def demo():
@@ -137,8 +139,10 @@ def test_production_run_rejects_shortage(demo):
     run = ProductionRun(
         warehouse=wh, part=shade, material=white, equipment=shade.equipment, good_qty=2
     )
-    with pytest.raises(ValidationError, match="есть 300 г, нужно 500 г"):
+    with pytest.raises(ValidationError) as excinfo:
         run.full_clean()
+    # repr экранирует неразрывный пробел, поэтому сверяем текст, а не match=
+    assert f"есть 300{NBSP}г, нужно 500{NBSP}г" in " ".join(excinfo.value.message_dict["material"])
     run.save()
     with pytest.raises(Shortage):
         run.post()

@@ -423,8 +423,16 @@ class InventoryLineInline(LineInline):
     model = InventoryLine
     form = InventoryLineForm
     autocomplete_fields = ITEM_FIELDS
-    fields = (*ITEM_FIELDS, "counted_qty", "entered_unit", "difference", "reason")
-    readonly_fields = ("difference",)
+    fields = (*ITEM_FIELDS, "counted_qty", "entered_unit", "difference_display", "reason")
+    readonly_fields = ("difference_display",)
+
+    @display(description="Разница")
+    def difference_display(self, obj):
+        if obj.difference is None:
+            return "—"
+        sign = "+" if obj.difference > 0 else ("−" if obj.difference < 0 else "")
+        return f"{sign}{obj.format_quantity(abs(obj.difference))}"
+
     min_num = 1
     verbose_name_plural = "Позиции"
 

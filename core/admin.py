@@ -3,6 +3,7 @@ from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import Group, User
 from django.core.exceptions import PermissionDenied
+from django.db import models
 from django.shortcuts import redirect
 from django.urls import reverse
 from simple_history.admin import SimpleHistoryAdmin
@@ -14,7 +15,31 @@ from .forms import ActiveChoicesForm
 from .models import SiteSettings, Size, Tag
 
 
-class HistoryAdmin(SimpleHistoryAdmin):
+def number_step(db_field) -> str | None:
+    """
+    Шаг стрелочек у числовых полей: деньги — 1 ₸ (копейки остаются в хранении для расчётных
+    цен), проценты — 0,1, количества — 1 (дробное вводится с клавиатуры). Без этого Django
+    ставит шаг по точности поля: 0,0001 у количеств и 0,01 у денег.
+    """
+    if not isinstance(db_field, models.DecimalField):
+        return None
+    if "percent" in db_field.name:
+        return "0.1"
+    if db_field.decimal_places == 2:
+        return "1"
+    return "any"
+
+
+class NumberStepsMixin:
+    def formfield_for_dbfield(self, db_field, request, **kwargs):
+        formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
+        step = number_step(db_field)
+        if formfield is not None and step and hasattr(formfield.widget, "attrs"):
+            formfield.widget.attrs["step"] = step
+        return formfield
+
+
+class HistoryAdmin(NumberStepsMixin, SimpleHistoryAdmin):
     """
     История изменений. simple_history разрешает POST на странице версии любому,
     у кого есть право просмотра, — закрываем это: менять запись может только тот,
@@ -27,7 +52,7 @@ class HistoryAdmin(SimpleHistoryAdmin):
         return super().history_form_view(request, object_id, version_id, extra_context)
 
 
-class ArchiveAdmin(PageHelpMixin, ModelAdmin):
+class ArchiveAdmin(NumberStepsMixin, PageHelpMixin, ModelAdmin):
     """
     Общие настройки: архивные записи видны через фильтр «Активно», не предлагаются
     в выпадающих списках и автокомплите, но у существующих записей остаются допустимыми.
@@ -110,7 +135,7 @@ class SizeAdmin(ArchiveAdmin):
     fields = ("name", "order", "is_active", "notes")
 
 
-class LineInline(TabularInline):
+class LineInline(NumberStepsMixin, TabularInline):
     """Табличная строка внутри карточки: архивные справочные записи не предлагаются."""
 
     form = ActiveChoicesForm

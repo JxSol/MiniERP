@@ -281,6 +281,15 @@ class StockBalance(StockItemMixin):
         return f"{self.item_label} — {self.warehouse}: {self.format_quantity(self.quantity)}"
 
 
+def fmt_key_qty(key: ItemKey, quantity: Decimal) -> str:
+    """Количество по ключу позиции с единицей: материал — в его единицах, остальное — шт."""
+    from core.admin_utils import fmt_quantity
+
+    if key[0] == ItemKind.MATERIAL.value:
+        return Material.objects.get(pk=key[1]).format_qty(quantity)
+    return fmt_quantity(quantity, "шт")
+
+
 def balance_of(warehouse_id: int, key: ItemKey, exclude_document=None) -> Decimal:
     """Остаток по движениям, при необходимости без движений указанного документа."""
     qs = StockMove.objects.filter(warehouse_id=warehouse_id, **StockItemMixin.key_filter(key))
@@ -390,15 +399,10 @@ class StockDocument(models.Model):
                 continue
             have = balance_of(warehouse_id, key, exclude_document=self)
             if have + delta < 0:
-                unit = (
-                    Material.objects.get(pk=key[1]).get_unit_display()
-                    if key[0] == "material"
-                    else "шт"
-                )
                 warehouse = Warehouse.objects.get(pk=warehouse_id)
                 shortages.append(
                     f"{StockItemMixin.key_label(key)} на складе «{warehouse}»: "
-                    f"есть {have.normalize():f} {unit}, нужно {(-delta).normalize():f} {unit}"
+                    f"есть {fmt_key_qty(key, have)}, нужно {fmt_key_qty(key, -delta)}"
                 )
         return shortages
 
@@ -438,7 +442,7 @@ class StockDocument(models.Model):
             if have < 0:
                 shortages.append(
                     f"{StockItemMixin.key_label(key)} на складе "
-                    f"«{Warehouse.objects.get(pk=warehouse_id)}»: не хватит {(-have).normalize():f}"
+                    f"«{Warehouse.objects.get(pk=warehouse_id)}»: не хватит {fmt_key_qty(key, -have)}"
                 )
         if shortages:
             raise Shortage("Отменить нельзя — остаток уйдёт в минус: " + "; ".join(shortages) + ".")
@@ -511,11 +515,16 @@ class ReceiptLine(models.Model):
         verbose_name_plural = "Позиции закупки"
 
     def __str__(self):
-        return f"{self.material} × {self.packs}"
+        from core.admin_utils import fmt_number
+
+        return (
+            f"{self.material}: {fmt_number(self.packs)} уп. × "
+            f"{self.material.format_qty(self.pack_size)}"
+        )
 
     @property
     def quantity(self) -> Decimal:
-        return self.packs * self.pack_size
+        return (self.packs * self.pack_size).quantize(Decimal("0.0001"))
 
     @property
     def total(self) -> Decimal:
