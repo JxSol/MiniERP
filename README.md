@@ -27,42 +27,51 @@
 ## Стек
 
 Python 3.13, Django 5.2, PostgreSQL 16 (в Docker), админка на django-unfold, история
-изменений django-simple-history. Зависимости закреплены в `requirements.txt`
-и `requirements-dev.txt`.
+изменений django-simple-history. Зависимости описаны в `pyproject.toml` и закреплены
+в `uv.lock` (менеджер [uv](https://docs.astral.sh/uv/)); `requirements.txt`
+и `requirements-dev.txt` — экспорт из lock-файла для установки через pip там, где uv нет.
 
 ## Запуск для разработки (Windows)
 
-Нужны Python 3.13, Git и Docker Desktop. В Docker живёт только база данных, Django
-запускается локально и подхватывает правки кода без перезапуска.
+Нужны uv, Git и Docker Desktop; Python 3.13 uv скачает сам. В Docker живёт только база
+данных, Django запускается локально и подхватывает правки кода без перезапуска.
 
 ```powershell
+# 0. uv, если ещё не стоит
+winget install astral-sh.uv
+
 # 1. База данных (контейнер erp-db-1, данные в томе pgdata)
 docker compose up -d
 
-# 2. Окружение Python
-py -3.13 -m venv .venv
-.venv\Scripts\pip install -r requirements-dev.txt
+# 2. Окружение: Python 3.13 и все зависимости (включая dev) в .venv, строго по uv.lock
+uv sync
 
 # 3. Настройки: скопировать и задать SECRET_KEY
 copy .env.example .env
-.venv\Scripts\python -c "from django.core.management.utils import get_random_secret_key as g; print(g())"
+uv run python -c "from django.core.management.utils import get_random_secret_key as g; print(g())"
 
 # 4. Таблицы, начальные справочники (категории, цвета, операции) и роли
-.venv\Scripts\python manage.py migrate
-.venv\Scripts\python manage.py createsuperuser
+uv run manage.py migrate
+uv run manage.py createsuperuser
 
 # 5. (необязательно) примеры из ТЗ: светильник «Луна», ёлочные шары, закупки и остатки
-.venv\Scripts\python manage.py load_demo
+uv run manage.py load_demo
 
 # 6. Запуск
-.venv\Scripts\python manage.py runserver
+uv run manage.py runserver
 ```
+
+`uv run` запускает команду в окружении проекта без активации; то же самое —
+`.venv\Scripts\python manage.py …`. Новая зависимость: `uv add <пакет>` (в dev —
+`uv add --group dev <пакет>`), после этого обновить экспорт:
+`uv export --no-hashes --no-dev -o requirements.txt` и
+`uv export --no-hashes -o requirements-dev.txt`.
 
 Админка: http://127.0.0.1:8000/admin/. В `DEBUG=True` Django сам отдаёт загруженные фото
 из папки `media/`.
 
 Демо-данные загружаются один раз: команда откажется, если модели из примера уже есть.
-Себестоимость пересчитывается автоматически; вручную — `python manage.py recalc_costs`.
+Себестоимость пересчитывается автоматически; вручную — `uv run manage.py recalc_costs`.
 
 ## Настройки (`.env`)
 
@@ -94,8 +103,8 @@ copy .env.example .env
 
 ```bash
 git clone https://github.com/JxSol/MiniERP.git erp && cd erp
-python3.13 -m venv .venv
-.venv/bin/pip install -r requirements.txt      # Windows: .venv\Scripts\pip
+uv sync --no-dev --frozen            # ровно версии из uv.lock, без pytest и ruff
+# без uv: python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```
 
 **3. `.env` для прода:** `DEBUG=False`, свой `SECRET_KEY`, `ALLOWED_HOSTS` и
@@ -104,16 +113,17 @@ python3.13 -m venv .venv
 **4. Таблицы, администратор, статика.**
 
 ```bash
-.venv/bin/python manage.py migrate
-.venv/bin/python manage.py createsuperuser
-.venv/bin/python manage.py collectstatic --noinput   # складывает статику в staticfiles/
+uv run manage.py migrate
+uv run manage.py createsuperuser
+uv run manage.py collectstatic --noinput   # складывает статику в staticfiles/
 ```
 
 **5. Приложение.** WSGI-сервер слушает только локальный адрес, наружу смотрит прокси.
 
 ```bash
-.venv/bin/waitress-serve --listen=127.0.0.1:8000 config.wsgi:application
-# на Linux можно gunicorn: .venv/bin/gunicorn config.wsgi -b 127.0.0.1:8000 -w 3
+uv run waitress-serve --listen=127.0.0.1:8000 config.wsgi:application
+# то же самое напрямую из окружения: .venv/bin/waitress-serve …
+# на Linux можно gunicorn: uv add gunicorn && uv run gunicorn config.wsgi -b 127.0.0.1:8000 -w 3
 ```
 
 Чтобы это была служба, на Linux — unit для systemd:
@@ -171,9 +181,9 @@ docker compose exec -T db pg_dump -U erp -Fc erp -f /tmp/erp.dump && docker comp
 
 ```bash
 git pull
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python manage.py migrate
-.venv/bin/python manage.py collectstatic --noinput
+uv sync --no-dev --frozen
+uv run manage.py migrate
+uv run manage.py collectstatic --noinput
 # перезапустить службу приложения
 ```
 
@@ -210,17 +220,18 @@ git pull
 Нужен запущенный Postgres (`docker compose up -d`): тесты создают базу `test_erp`.
 
 ```powershell
-.venv\Scripts\ruff check .
-.venv\Scripts\ruff format --check .
-.venv\Scripts\python -m pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest
 ```
 
-То же самое делает GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)),
-плюс проверка, что миграции актуальны. Пример «Луны» из ТЗ (п. 4.9) — обязательный тест:
+То же самое делает GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)):
+ставит зависимости строго по `uv.lock`, гоняет линтер и тесты и проверяет, что миграции
+актуальны. Пример «Луны» из ТЗ (п. 4.9) — обязательный тест:
 итог должен совпадать до копейки; отдельный тест следит, чтобы ни на одной странице
 админки не было сырых чисел вроде «600,0000».
 
 ## Перевод интерфейса
 
 Подписи unfold, которых нет в его пакете, переведены в `locale/ru/LC_MESSAGES/django.po`.
-После правок: `python scripts/compile_locale.py` (собранный `django.mo` коммитится вместе с `.po`).
+После правок: `uv run python scripts/compile_locale.py` (собранный `django.mo` коммитится вместе с `.po`).
