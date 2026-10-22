@@ -1,14 +1,18 @@
+from decimal import Decimal, InvalidOperation
+
 from django.contrib import admin
 from django.contrib.auth.admin import GroupAdmin as BaseGroupAdmin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import Group, User
 from django.core.exceptions import PermissionDenied
 from django.db import models
+from django.forms import NumberInput
 from django.shortcuts import redirect
 from django.urls import reverse
 from simple_history.admin import SimpleHistoryAdmin
 from unfold.admin import ModelAdmin, TabularInline
 from unfold.forms import AdminPasswordChangeForm, UserChangeForm, UserCreationForm
+from unfold.widgets import UnfoldAdminDecimalFieldWidget
 
 from .admin_utils import PageHelpMixin
 from .forms import ActiveChoicesForm
@@ -30,12 +34,24 @@ def number_step(db_field) -> str | None:
     return "any"
 
 
+class CleanDecimalInput(UnfoldAdminDecimalFieldWidget):
+    """В поле ввода число без хвостовых нулей: «1000», «9000», «0,5» вместо «1000.0000»."""
+
+    def format_value(self, value):
+        if value is None or value == "":
+            return None
+        try:
+            return f"{Decimal(str(value)).normalize():f}"
+        except InvalidOperation:
+            return super().format_value(value)
+
+
 class NumberStepsMixin:
     def formfield_for_dbfield(self, db_field, request, **kwargs):
         formfield = super().formfield_for_dbfield(db_field, request, **kwargs)
         step = number_step(db_field)
-        if formfield is not None and step and hasattr(formfield.widget, "attrs"):
-            formfield.widget.attrs["step"] = step
+        if formfield is not None and step and isinstance(formfield.widget, NumberInput):
+            formfield.widget = CleanDecimalInput(attrs={**formfield.widget.attrs, "step": step})
         return formfield
 
 

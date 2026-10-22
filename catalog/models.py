@@ -337,7 +337,7 @@ class Material(UniqueNameModel):
     @property
     def unit_price(self) -> Decimal | None:
         """Среднее по актуальным предложениям. None — цены ещё нет."""
-        prices = [o.unit_price for o in self.active_offers]
+        prices = [o.unit_price for o in self.active_offers if o.unit_price > 0]
         if not prices:
             return None
         return sum(prices, Decimal(0)) / len(prices)
@@ -397,7 +397,7 @@ class Material(UniqueNameModel):
         """Площадь листа, м² (листовой материал)."""
         if self.form_type != MaterialForm.SHEET or not (self.width_cm and self.length_cm):
             return None
-        return (self.width_cm * self.length_cm / 10000).quantize(Decimal("0.0001"))
+        return self.width_cm * self.length_cm / 10000  # точно: размеры с 2 знаками
 
     @property
     def piece_volume_m3(self) -> Decimal | None:
@@ -432,11 +432,20 @@ class Material(UniqueNameModel):
         if self.form_type == MaterialForm.SHEET and unit == QtyUnit.SQ_METER:
             if not self.sheet_area_m2:
                 raise ValidationError("Укажите размеры листа в карточке материала.")
-            return (Decimal(quantity) / self.sheet_area_m2).quantize(Decimal("0.0001"))
-        if self.form_type == MaterialForm.ROLL and unit == QtyUnit.LINEAR_METER:
+            result = (Decimal(quantity) / self.sheet_area_m2).quantize(Decimal("0.0001"))
+        elif self.form_type == MaterialForm.ROLL and unit == QtyUnit.LINEAR_METER:
             if not self.width_m:
                 raise ValidationError("Укажите ширину рулона в карточке материала.")
-            return (Decimal(quantity) * self.width_m).quantize(Decimal("0.0001"))
+            result = (Decimal(quantity) * self.width_m).quantize(Decimal("0.0001"))
+        else:
+            result = None
+        if result is not None:
+            if result <= 0:
+                raise ValidationError(
+                    f"После перевода в {self.get_unit_display()} получается 0 — укажите "
+                    f"количество крупнее или сразу в {self.get_unit_display()}."
+                )
+            return result
         allowed = " или ".join(
             [self.get_unit_display(), *(QtyUnit(u).label for u in self.alt_units())]
         )
@@ -529,7 +538,11 @@ class MaterialOffer(models.Model):
         "пачка 10 листов → 10; бухта кабеля 100 м → 100. Для рулона подставляется площадь "
         "рулона в м².",
     )
-    pack_price = money_field("Цена упаковки, ₸", help_text="Сколько стоит одна упаковка.")
+    pack_price = money_field(
+        "Цена упаковки, ₸",
+        validators=[MinValueValidator(Decimal("0.01"))],  # бесплатного материала не бывает
+        help_text="Сколько стоит одна упаковка.",
+    )
     url = models.URLField("Ссылка", blank=True, help_text="Страница товара у поставщика.")
     is_active = models.BooleanField(
         "Актуально",
@@ -548,10 +561,10 @@ class MaterialOffer(models.Model):
 
     def __str__(self):
         who = " · ".join(str(x) for x in (self.manufacturer, self.supplier) if x)
-        from core.admin_utils import fmt_money
+        from core.admin_utils import fmt_price
 
         pack = self.material.format_qty(self.pack_size)
-        return f"{who or 'без поставщика'} — {pack} за {fmt_money(self.pack_price, 0)}"
+        return f"{who or 'без поставщика'} — {pack} за {fmt_price(self.pack_price)}"
 
     @property
     def unit_price(self) -> Decimal:
@@ -600,11 +613,11 @@ class MaterialPriceHistory(models.Model):
         ordering = ["-changed_at"]
 
     def __str__(self):
-        from core.admin_utils import fmt_money
+        from core.admin_utils import fmt_price
 
         return (
             f"{self.material}: {self.material.format_qty(self.pack_size)} за "
-            f"{fmt_money(self.pack_price, 0)} от {self.changed_at:%d.%m.%Y}"
+            f"{fmt_price(self.pack_price)} от {self.changed_at:%d.%m.%Y}"
         )
 
     def save(self, *args, **kwargs):

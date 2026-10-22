@@ -4,7 +4,7 @@ from decimal import Decimal as D
 
 import pytest
 
-from core.admin_utils import fmt_duration, fmt_quantity
+from core.admin_utils import fmt_duration, fmt_money, fmt_number, fmt_price, fmt_quantity
 from core.widgets import DurationMinutesField, minutes_to_parts, parts_to_minutes
 
 NBSP = " "
@@ -50,3 +50,14 @@ def test_fmt_duration():
     assert fmt_duration(D(480)) == "8 ч"
     assert fmt_duration(D(90)) == "1 ч 30 мин"
     assert fmt_duration(D("12.5")) == "12,5 мин"
+
+
+def test_tiny_and_zero_values():
+    assert fmt_money(D("0.004")) == f"<{NBSP}0,01{NBSP}₸"
+    assert fmt_money(D("-0.001")) == f"0,00{NBSP}₸"
+    assert fmt_price(D("0.00001")) == f"<{NBSP}0,0001{NBSP}₸"
+    assert fmt_price(D("0.0375")) == f"0,0375{NBSP}₸"
+    assert fmt_number(D("1000.0000")) == f"1{NBSP}000"
+    assert fmt_number(D("0.00004")) == f"<{NBSP}0,0001"
+    assert fmt_quantity(D("33.33333333333333333"), "г") == f"33,3333{NBSP}г"
+    assert fmt_duration(D("59.97")) == "1 ч"

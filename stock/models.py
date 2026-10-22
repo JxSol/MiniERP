@@ -507,7 +507,10 @@ class ReceiptLine(models.Model):
         "В упаковке", help_text="Единиц расхода в одной упаковке. Подставляется из предложения."
     )
     pack_price = models.DecimalField(
-        "Цена упаковки, ₸", max_digits=14, decimal_places=2, validators=[MinValueValidator(ZERO)]
+        "Цена упаковки, ₸",
+        max_digits=14,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.01"))],  # бесплатное — через «Оприходование»
     )
 
     class Meta:
@@ -528,7 +531,7 @@ class ReceiptLine(models.Model):
 
     @property
     def total(self) -> Decimal:
-        return self.packs * self.pack_price
+        return (self.packs * self.pack_price).quantize(Decimal("0.01"))
 
     def clean(self):
         super().clean()
@@ -600,7 +603,8 @@ class ProductionRun(StockDocument):
 
     @property
     def material_used(self) -> Decimal:
-        return self.part.material_per_piece * (self.good_qty + self.scrap_qty)
+        used = self.part.material_per_piece * (self.good_qty + self.scrap_qty)
+        return used.quantize(Decimal("0.0001"))  # точность движений склада
 
     def build_moves(self):
         moves = [

@@ -66,6 +66,17 @@ def test_no_raw_numbers_on_admin_pages(client, admin_user, demo):
     )
 
 
+def test_inputs_without_trailing_zeros(client, admin_user, demo):
+    """В полях ввода число без хвоста: value="1000", а не "1000.0000"."""
+    from stock.models import Receipt
+
+    client.force_login(admin_user)
+    receipt = Receipt.objects.first()
+    page = client.get(reverse("admin:stock_receipt_change", args=[receipt.pk])).content.decode()
+    assert 'value="1000"' in page and 'value="1000.0000"' not in page
+    assert 'value="9000"' in page and 'value="9000.00"' not in page
+
+
 def _request(client, user):
     from django.test import RequestFactory
 

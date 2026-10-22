@@ -8,7 +8,14 @@ from unfold.decorators import display
 from unfold.widgets import UnfoldAdminColorInputWidget
 
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
-from core.admin_utils import color_swatch, fmt_money, fmt_number, fmt_price, fmt_quantity
+from core.admin_utils import (
+    color_swatch,
+    fmt_duration,
+    fmt_money,
+    fmt_number,
+    fmt_price,
+    fmt_quantity,
+)
 from core.forms import ActiveChoicesForm
 
 from .models import (
@@ -193,7 +200,7 @@ class PriceHistoryInline(LineInline):
 
     @display(description="Цена упаковки")
     def pack_price_display(self, obj):
-        return fmt_money(obj.pack_price, 0)
+        return fmt_price(obj.pack_price)
 
     def has_add_permission(self, request, obj=None):
         return False
@@ -450,11 +457,15 @@ class EquipmentAdmin(HistoryAdmin, ArchiveAdmin):
 
 @admin.register(OperationType)
 class OperationTypeAdmin(HistoryAdmin, ArchiveAdmin):
-    list_display = ("name", "level", "rate_display", "default_minutes", "order", "is_active")
+    list_display = ("name", "level", "rate_display", "minutes_display", "order", "is_active")
     list_filter = ("level",)
     list_editable = ("order",)
     search_fields = ("name",)
     fields = ("name", "level", "rate", "default_minutes", "order", "is_active", "notes")
+
+    @display(description="Время по умолчанию", ordering="default_minutes")
+    def minutes_display(self, obj):
+        return fmt_duration(obj.default_minutes) if obj.default_minutes else "—"
 
     @display(description="Ставка, ₸/ч")
     def rate_display(self, obj):

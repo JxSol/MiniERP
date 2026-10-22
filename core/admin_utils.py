@@ -26,7 +26,13 @@ def fmt_money(value: Decimal | None, digits: int = 2) -> str:
     """7988.6634 → «7 988,66 ₸» (неразрывные пробелы между разрядами)."""
     if value is None:
         return "—"
-    quantized = Decimal(value).quantize(Decimal(1).scaleb(-digits), rounding=ROUND_HALF_UP)
+    value = Decimal(value)
+    unit = Decimal(1).scaleb(-digits)
+    quantized = value.quantize(unit, rounding=ROUND_HALF_UP)
+    if quantized == 0 and value > 0:
+        return "< " + fmt_money(unit, digits)  # «< 0,01 ₸»: мало, но не бесплатно
+    if quantized == 0:
+        quantized = Decimal(0).quantize(unit)  # без «−0,00»
     text = f"{quantized:,.{digits}f}".replace(",", " ").replace(".", ",")
     return f"{text} ₸"
 
@@ -36,6 +42,8 @@ def fmt_price(value: Decimal | None) -> str:
     if value is None:
         return "—"
     quantized = Decimal(value).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    if quantized == 0 and Decimal(value) > 0:
+        return "< " + fmt_money(Decimal("0.0001"), 4)
     text = f"{quantized:f}"
     if "." in text:
         text = text.rstrip("0").rstrip(".")
@@ -62,9 +70,9 @@ def fmt_duration(minutes: Decimal | None) -> str:
     """480 → «8 ч», 90 → «1 ч 30 мин», 12.5 → «12,5 мин»."""
     if minutes is None:
         return "—"
-    minutes = Decimal(minutes)
+    minutes = Decimal(minutes).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
     hours, rest = divmod(minutes, 60)
-    rest = rest.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP).normalize()
+    rest = rest.normalize()
     if hours and rest:
         return f"{int(hours)} ч {rest:f} мин".replace(".", ",")
     if hours:
@@ -77,6 +85,10 @@ def fmt_number(value: Decimal | None) -> str:
     if value is None:
         return "—"
     quantized = Decimal(value).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+    if quantized == 0 and Decimal(value) > 0:
+        return "< 0,0001"
+    if quantized == 0:
+        quantized = Decimal(0)
     text = f"{quantized.normalize():,f}"
     return text.replace(",", " ").replace(".", ",")
 
@@ -155,7 +167,7 @@ def _qty(node) -> str:
 
 def _row(node, depth: int) -> str:
     unit_cost = (
-        fmt_money(node.unit_cost) + (f" / {node.unit}" if node.unit else "")
+        fmt_price(node.unit_cost) + (f" / {node.unit}" if node.unit else "")
         if node.unit_cost is not None and node.kind not in ("labor",)
         else ""
     )

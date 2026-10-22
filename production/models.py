@@ -167,6 +167,14 @@ class Part(UniqueNameModel):
 
     def clean(self):
         super().clean()
+        if self.batch_material_qty and self.batch_size:
+            if self.material_per_piece.quantize(Decimal("0.0001")) <= 0:
+                raise ValidationError(
+                    {
+                        "batch_material_qty": "Расход на одну штуку меньше 0,0001 — укажите "
+                        "партию крупнее или материал в более мелкой единице."
+                    }
+                )
         if self.pk and self.code and self.equipment_id:
             old_tech = self.code.split("-")[1]
             if old_tech != self.equipment.technology_code:
@@ -386,7 +394,7 @@ class ProductModel(UniqueNameModel):
             if line.part.material.unit == Unit.GRAM:
                 total += line.part.material_per_piece * line.quantity
                 found = True
-        return total if found else None
+        return total.quantize(Decimal("0.1")) if found else None
 
 
 class ModelPart(models.Model):

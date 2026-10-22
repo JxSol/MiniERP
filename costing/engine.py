@@ -139,6 +139,11 @@ class ProductSpec:
 # --- Формулы ----------------------------------------------------------------------
 
 
+def _pct(value: Decimal) -> str:
+    """Процент для названий узлов: «5», «2,5» (без зависимости от Django)."""
+    return f"{value.normalize():f}".replace(".", ",")
+
+
 def machine_rates(
     name: str,
     *,
@@ -246,7 +251,7 @@ def part_cost(spec: PartSpec) -> CostNode:
     scrap = scrap_markup(material.amount + machine.amount, spec.scrap_percent)
     if scrap:
         children.append(
-            CostNode(kind="scrap", name=f"Брак {spec.scrap_percent.normalize():f} %", amount=scrap)
+            CostNode(kind="scrap", name=f"Брак {_pct(spec.scrap_percent)} %", amount=scrap)
         )
     children.extend(_labor_node(op) for op in spec.operations)
 
@@ -288,7 +293,7 @@ def product_cost(spec: ProductSpec) -> CostNode:
         children.append(
             CostNode(
                 kind="overhead",
-                name=f"Накладные {spec.overhead_percent.normalize():f} %",
+                name=f"Накладные {_pct(spec.overhead_percent)} %",
                 amount=overhead,
             )
         )

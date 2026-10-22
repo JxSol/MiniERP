@@ -20,7 +20,14 @@ from unfold.views import ChangeList
 from unfold.widgets import UnfoldAdminSelectWidget
 
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
-from core.admin_utils import PageHelpMixin, fmt_number, fmt_price, fmt_quantity, hx_redirect
+from core.admin_utils import (
+    PageHelpMixin,
+    fmt_money,
+    fmt_number,
+    fmt_price,
+    fmt_quantity,
+    hx_redirect,
+)
 from core.forms import ActiveChoicesForm, QuantityUnitFormMixin
 
 from . import reports
@@ -230,6 +237,12 @@ class ReceiptLineForm(ActiveChoicesForm):
             )
         if data.get("pack_price") is None:
             self.add_error("pack_price", "Укажите цену упаковки или выберите предложение.")
+        elif data["pack_price"] <= 0:
+            self.add_error(
+                "pack_price",
+                "Цена должна быть больше нуля: бесплатное поступление оформляется "
+                "документом «Оприходование».",
+            )
         return data
 
 
@@ -262,9 +275,9 @@ class ReceiptLineInline(LineInline):
         parts = obj.material.price_breakdown(obj.pack_price / obj.pack_size)
         return " · ".join(f"{fmt_price(p)}/{u}" for p, u in parts)
 
-    @display(description="Сумма, ₸")
+    @display(description="Сумма")
     def total_display(self, obj):
-        return fmt_number(obj.total) if obj.pk else "—"
+        return fmt_money(obj.total, 0) if obj.pk else "—"
 
 
 @admin.register(Receipt)

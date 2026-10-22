@@ -105,8 +105,8 @@ class Catalog:
             name, price = f"{m.name}, любой цвет", self.line_price(m)
         else:
             name, price = m.full_name, m.unit_price
-        if price is None:
-            raise CostError(f"У материала «{name}» нет актуальных предложений с ценой.")
+        if price is None or price <= 0:
+            raise CostError(f"У материала «{name}» нет актуальных предложений с ценой больше нуля.")
         return MaterialUse(
             name=name, quantity=quantity, unit=m.get_unit_display(), unit_price=price
         )

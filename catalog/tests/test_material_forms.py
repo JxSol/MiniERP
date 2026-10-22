@@ -10,6 +10,7 @@ from django.urls import reverse
 from catalog.models import Material, MaterialCategory, MaterialForm, MaterialOffer, QtyUnit, Unit
 from core.demo import load_demo
 from costing.services import recalculate_all
+from production.models import Part
 from sales.admin import ProductPackagingForm
 from sales.models import Product
 from stock.admin import ITEM_FIELDS, ItemLineForm
@@ -91,6 +92,19 @@ def test_piece_material_volume_and_prices():
     assert box.format_qty(D(10)) == f"10{NBSP}шт (0,9{NBSP}м³)"
     with pytest.raises(ValidationError, match="вводится"):
         box.to_base(D(1), QtyUnit.SQ_METER)  # коробки списываются только поштучно
+
+
+def test_zero_price_is_rejected(demo):
+    """Нулевая цена не делает материал бесплатным: её не принимают ни предложение, ни закупка."""
+    bubble = Material.objects.get(name="ВПП плёнка 120 см")
+    offer = MaterialOffer(material=bubble, pack_size=D(120), pack_price=D(0))
+    with pytest.raises(ValidationError):
+        offer.full_clean()
+    luna_part = Part(name="Пылинка", batch_material_qty=D("0.0001"), batch_size=10)
+    with pytest.raises(ValidationError, match="меньше 0,0001"):
+        luna_part.clean()
+    with pytest.raises(ValidationError, match="получается 0"):
+        bubble.to_base(D("0.00001"), QtyUnit.LINEAR_METER)
 
 
 def test_sheet_and_roll_require_dimensions():
