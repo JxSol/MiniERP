@@ -12,3 +12,4 @@ psycopg-binary==3.3.6
 sqlparse==0.6.0
 tablib==3.10.0
 tzdata==2026.5
+waitress==3.0.2
