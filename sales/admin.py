@@ -96,7 +96,7 @@ def _growth(product: Product):
 class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAdmin):
     list_display = (
         "photo",
-        "sku",
+        "article",
         "name",
         "kind",
         "status_badge",
@@ -104,9 +104,9 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
         "fixed_display",
         "growth_display",
     )
-    list_display_links = ("photo", "sku", "name")
+    list_display_links = ("photo", "article", "name")
     list_filter = ("status", "kind", "tags")
-    search_fields = ("sku", "name", "common_barcode", "items__variant__model__name")
+    search_fields = ("article", "sku", "name", "common_barcode", "items__variant__model__name")
     inlines = (
         ProductItemInline,
         ProductPackagingInline,
@@ -123,7 +123,7 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
         "growth_display",
     )
     cost_fields = ("cost_display", "fixed_display", "growth_display", "cost_tree")
-    actions = ("fix_cost_bulk",)
+    actions = ("fix_cost_bulk", "assign_articles")
     actions_detail = ("fix_cost_detail",)
     fieldsets = (
         (
@@ -132,7 +132,7 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
                 "classes": ["tab"],
                 "fields": (
                     "main_photo_display",
-                    "sku",
+                    ("article", "sku"),
                     "name",
                     "kind",
                     ("status", "problems_display"),
@@ -153,6 +153,12 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
 
     def get_queryset(self, request):
         return super().get_queryset(request).prefetch_related("snapshots")
+
+    @admin.action(description="Сформировать артикулы (где пусто)")
+    def assign_articles(self, request, queryset):
+        done = sum(1 for product in queryset.filter(article="") if product.assign_article())
+        left = queryset.filter(article="").count()
+        messages.success(request, f"Артикулы присвоены: {done}. Без артикула осталось: {left}.")
 
     @display(description="Главное фото")
     def main_photo_display(self, obj):
@@ -247,6 +253,7 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
     def save_related(self, request, form, formsets, change):
         super().save_related(request, form, formsets, change)
         product = form.instance
+        product.assign_article()  # состав уже сохранён — можно собрать артикул
         if product.status == ProductStatus.ACTIVE:
             problems = product.activation_problems()
             if problems:

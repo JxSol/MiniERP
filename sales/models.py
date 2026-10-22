@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator
+from django.core.validators import MinValueValidator, RegexValidator
 from django.db import models
 from simple_history.models import HistoricalRecords
 
@@ -24,6 +24,7 @@ from core.models import (
     UniqueNameModel,
     money_field,
     next_code,
+    next_number,
     positive_decimal_field,
 )
 from production.models import Variant
@@ -51,7 +52,17 @@ class ProductStatus(models.TextChoices):
 
 
 class Product(UniqueNameModel):
-    sku = CodeField("Артикул (SKU)", unique=True)  # SKU-0000001, генерируется
+    sku = CodeField("Код (SKU)", unique=True)  # SKU-0000001, служебный код базы и QR
+    article = models.CharField(
+        "Артикул",
+        max_length=20,
+        blank=True,
+        validators=[
+            RegexValidator(r"^[A-Z0-9-]{3,20}$", "Латинские заглавные буквы, цифры и дефис.")
+        ],
+        help_text="Собирается сам: код категории + номер модели + буква варианта (TE0001A), "
+        "у наборов -N и количество. Можно поправить, повтор не сохранится.",
+    )
     kind = models.CharField(
         "Вид", max_length=10, choices=ProductKind.choices, default=ProductKind.SINGLE
     )
@@ -120,6 +131,11 @@ class Product(UniqueNameModel):
                 condition=~models.Q(common_barcode=""),
                 name="sales_product_barcode_uniq",
             ),
+            models.UniqueConstraint(
+                fields=["article"],
+                condition=~models.Q(article=""),
+                name="sales_product_article_uniq",
+            ),
         ]
 
     @property
@@ -146,12 +162,52 @@ class Product(UniqueNameModel):
             problems.append("не указаны габариты в упаковке")
         if not self.weight_g:
             problems.append("не указана масса в упаковке")
+        if not self.article:
+            problems.append("нет артикула: у категории модели не задан код для артикулов")
         return problems
 
     def save(self, *args, **kwargs):
         if not self.sku:
             self.sku = next_code("SKU")
         super().save(*args, **kwargs)
+
+    def build_article(self) -> str:
+        """
+        Артикул по правилам: одна модель → основа модели + буква варианта (X, если цветов
+        несколько), набор → ещё -N и количество; разные модели одной категории → код + X;
+        разные категории с общим началом кода → общее начало + X; иначе XT.
+        """
+        import os
+
+        items = list(self.items.select_related("variant__model__category"))
+        if not items:
+            return ""
+        models_ = {item.variant.model for item in items}
+        total = sum(item.quantity for item in items)
+        tail = f"-N{total}" if self.kind == ProductKind.SET else ""
+        if len(models_) == 1:
+            model = items[0].variant.model
+            if not model.article_base:
+                return ""
+            variants = {item.variant for item in items}
+            letters = next(iter(variants)).article_letters if len(variants) == 1 else "X"
+            return f"{model.article_base}{letters}{tail}"
+        codes = [m.category.article_code if m.category_id else "" for m in models_]
+        if not all(codes):
+            return ""
+        prefix = os.path.commonprefix(codes)
+        mix = f"{prefix}X" if prefix else "XT"
+        return f"{mix}{next_number(f'ART-{mix}'):04d}{tail}"
+
+    def assign_article(self) -> str:
+        """Присваивает артикул, если его ещё нет и его можно собрать. Возвращает артикул."""
+        if self.article:
+            return self.article
+        article = self.build_article()
+        if article and not Product.objects.filter(article=article).exclude(pk=self.pk).exists():
+            self.article = article
+            type(self).objects.filter(pk=self.pk).update(article=article)
+        return self.article
 
 
 class ProductItem(models.Model):

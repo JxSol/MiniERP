@@ -5,7 +5,7 @@
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator
+from django.core.validators import MinValueValidator, RegexValidator
 from django.db import models
 from simple_history.models import HistoricalRecords
 
@@ -31,6 +31,7 @@ from core.models import (
     money_field,
     name_key,
     next_code,
+    next_number,
     percent_field,
     positive_decimal_field,
 )
@@ -70,6 +71,18 @@ class ProductCategory(UniqueNameModel):
         related_name="children",
     )
     path = models.CharField("Полное название", max_length=500, editable=False, db_index=True)
+    code = models.CharField(
+        "Код для артикулов",
+        max_length=3,
+        blank=True,
+        validators=[
+            RegexValidator(
+                r"^[A-HJ-NP-WYZ]{2,3}$", "2–3 латинские заглавные буквы; I, O и X не используются."
+            )
+        ],
+        help_text="Задаётся у самой глубокой категории товара: TE, TF, HPB. Из него и номера "
+        "модели складывается артикул (TE0001A). Буква X зарезервирована для наборов-миксов.",
+    )
 
     name_scope = ("parent",)
 
@@ -82,11 +95,26 @@ class ProductCategory(UniqueNameModel):
                 fields=["parent", "name_key"],
                 name="production_productcategory_name_uniq",
                 nulls_distinct=False,
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["code"],
+                condition=~models.Q(code=""),
+                name="production_productcategory_code_uniq",
+            ),
         ]
 
     def __str__(self):
         return self.path or self.name
+
+    @property
+    def article_code(self) -> str:
+        """Код для артикулов: свой или ближайшего родителя."""
+        node = self
+        while node is not None:
+            if node.code:
+                return node.code
+            node = node.parent
+        return ""
 
     def clean(self):
         super().clean()
@@ -322,6 +350,13 @@ class ProductModel(UniqueNameModel):
         blank=True,
     )
 
+    article_number = models.PositiveIntegerField(
+        "Номер модели для артикула",
+        null=True,
+        blank=True,
+        editable=False,
+        help_text="Порядковый номер внутри кода категории; присваивается один раз.",
+    )
     cost_cached = models.DecimalField(
         "Себестоимость (материалы по умолчанию), ₸",
         max_digits=14,
@@ -366,7 +401,19 @@ class ProductModel(UniqueNameModel):
     def save(self, *args, **kwargs):
         if not self.code:
             self.code = next_code("M")
+        if not self.article_number and self.category_id:
+            code = self.category.article_code
+            if code:
+                self.article_number = next_number(f"ART-{code}")
         super().save(*args, **kwargs)
+
+    @property
+    def article_base(self) -> str:
+        """Основа артикула: код категории + номер модели (TE0001). Пусто — у категории нет кода."""
+        if not self.article_number or not self.category_id:
+            return ""
+        code = self.category.article_code
+        return f"{code}{self.article_number:04d}" if code else ""
 
     def slot_names(self) -> list[str]:
         """Цветовые слоты модели в порядке появления в составе."""
@@ -471,6 +518,18 @@ class Coloring(models.TextChoices):
     RANDOM = "random", "Случайная (ассорти)"
 
 
+ARTICLE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWYZ"  # без I и O (похожи на цифры) и X (микс)
+
+
+def variant_letters(number: int) -> str:
+    """Номер варианта → буквы артикула: 1 → A, 23 → Z, 24 → AA (как столбцы в таблице)."""
+    result = ""
+    while number > 0:
+        number, rem = divmod(number - 1, len(ARTICLE_LETTERS))
+        result = ARTICLE_LETTERS[rem] + result
+    return result
+
+
 class Variant(ArchivableModel):
     """Конкретная расцветка модели (ТЗ п. 6.7)."""
 
@@ -508,6 +567,11 @@ class Variant(ArchivableModel):
 
     def __str__(self):
         return f"{self.model.name} — {self.name}"
+
+    @property
+    def article_letters(self) -> str:
+        """Буква варианта для артикула: 01 → A, 02 → B."""
+        return variant_letters(int(self.code)) if self.code and self.code.isdigit() else ""
 
     @property
     def full_code(self) -> str:

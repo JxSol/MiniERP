@@ -206,7 +206,7 @@ def load_demo() -> dict:
         batch_size=10,
     )
 
-    lamps = ProductCategory.objects.create(name="Светильники")
+    lamps = ProductCategory.objects.get(name="Настольные светильники")  # код LT из сида
     luna = ProductModel.objects.create(
         name="Светильник Луна",
         category=lamps,
@@ -233,7 +233,7 @@ def load_demo() -> dict:
         batch_minutes=D(240),
         batch_size=8,
     )
-    newyear = ProductCategory.objects.create(name="Новый год")
+    newyear = ProductCategory.objects.get(name="Ёлочные игрушки")  # код NT из сида
     ball = ProductModel.objects.create(
         name="Ёлочный шар",
         category=newyear,

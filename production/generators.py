@@ -52,6 +52,7 @@ def create_single_product(variant: Variant) -> Product | None:
         return None
     product = Product.objects.create(name=name, kind=ProductKind.SINGLE)
     ProductItem.objects.create(product=product, variant=variant, quantity=1)
+    product.assign_article()
     if model.default_packaging_id:
         ProductPackaging.objects.create(
             product=product, material=model.default_packaging, quantity=Decimal(1)
@@ -166,6 +167,7 @@ def create_set(
     product = Product.objects.create(name=name, kind=ProductKind.SET)
     for variant in variants:
         ProductItem.objects.create(product=product, variant=variant, quantity=total // count)
+    product.assign_article()
     if packaging:
         ProductPackaging.objects.create(product=product, material=packaging, quantity=Decimal(1))
     kit = _operation("kit")

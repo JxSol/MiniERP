@@ -71,9 +71,9 @@ def _link(obj, text=None):
 
 @admin.register(ProductCategory)
 class ProductCategoryAdmin(ArchiveAdmin):
-    list_display = ("path", "is_active")
-    search_fields = ("name", "path")
-    fields = ("name", "parent", "is_active", "notes")
+    list_display = ("path", "code", "is_active")
+    search_fields = ("name", "path", "code")
+    fields = ("name", "parent", "code", "is_active", "notes")
     ordering = ("path",)
 
 
@@ -388,6 +388,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
     inlines = (ModelPartInline, ModelComponentInline, ModelOperationInline, ModelPhotoInline)
     readonly_fields = (
         "code",
+        "article_base",
         "main_photo_display",
         "calculated_weight_display",
         "variants_overview",
@@ -405,7 +406,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
                 "fields": (
                     "main_photo_display",
                     "name",
-                    "code",
+                    ("code", "article_base"),
                     "category",
                     "tags",
                     "status",
@@ -443,6 +444,12 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
     def photo(self, obj):
         p = main_photo(model=obj)
         return thumbnail(p.preview_url if p else "", 40)
+
+    @display(description="Основа артикула")
+    def article_base(self, obj):
+        if not obj.pk:
+            return "появится после сохранения, если у категории есть код"
+        return obj.article_base or "— (у категории нет кода для артикулов)"
 
     @display(description="Фото первого варианта")
     def main_photo_display(self, obj):
@@ -794,7 +801,7 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
         product = generators.single_product_of(obj)
         if product is None:
             return "ещё не создан"
-        return _link(product, f"{product.sku} — {product.name}")
+        return _link(product, f"{product.article or product.sku} — {product.name}")
 
     @display(description="Код")
     def full_code(self, obj):

@@ -69,15 +69,20 @@ class CodeCounter(models.Model):
         return f"{self.prefix}: {self.value}"
 
 
-def next_code(prefix: str) -> str:
-    """Следующий код вида {prefix}-0000001. Безопасно при одновременных запросах."""
+def next_number(prefix: str) -> int:
+    """Следующее значение счётчика (номер модели в категории для артикула и т. п.)."""
     from django.db import transaction
 
     with transaction.atomic():
         counter, _ = CodeCounter.objects.select_for_update().get_or_create(prefix=prefix)
         counter.value += 1
         counter.save(update_fields=["value"])
-    return f"{prefix}-{counter.value:0{CODE_DIGITS}d}"
+    return counter.value
+
+
+def next_code(prefix: str) -> str:
+    """Следующий код вида {prefix}-0000001. Безопасно при одновременных запросах."""
+    return f"{prefix}-{next_number(prefix):0{CODE_DIGITS}d}"
 
 
 def percent_field(verbose_name, **kwargs):
