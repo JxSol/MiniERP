@@ -106,3 +106,18 @@ def test_dialog_shows_validation_error(client, admin_user, demo):
     response = client.post(url, {"_form_submitted": "on"})
     assert response.status_code == 200
     assert "Отметьте хотя бы один материал" in response.content.decode()
+
+
+def test_role_descriptions_are_shown(client, admin_user):
+    """Список ролей и карточка пользователя объясняют, кто за что отвечает."""
+    from core.roles import ROLE_DESCRIPTIONS
+
+    client.force_login(admin_user)
+    roles = client.get(reverse("admin:auth_group_changelist")).content.decode()
+    for name, text in ROLE_DESCRIPTIONS.items():
+        assert name in roles and text[:40] in roles, name
+    group = Group.objects.get(name="Технолог")
+    card = client.get(reverse("admin:auth_group_change", args=[group.pk])).content.decode()
+    assert "Отвечает за производство и склад" in card
+    user_page = client.get(reverse("admin:auth_user_change", args=[admin_user.pk])).content.decode()
+    assert "Владелец системы" in user_page and "Только смотрит каталог" in user_page

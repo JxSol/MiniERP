@@ -9,14 +9,17 @@ from django.db import models
 from django.forms import NumberInput
 from django.shortcuts import redirect
 from django.urls import reverse
+from django.utils.html import format_html, format_html_join
 from simple_history.admin import SimpleHistoryAdmin
 from unfold.admin import ModelAdmin, TabularInline
+from unfold.decorators import display
 from unfold.forms import AdminPasswordChangeForm, UserChangeForm, UserCreationForm
 from unfold.widgets import UnfoldAdminDecimalFieldWidget
 
 from .admin_utils import PageHelpMixin
 from .forms import ActiveChoicesForm
 from .models import SiteSettings, Size, Tag
+from .roles import ROLE_DESCRIPTIONS, role_description
 
 
 def number_step(db_field) -> str | None:
@@ -164,13 +167,34 @@ admin.site.unregister(User)
 admin.site.unregister(Group)
 
 
+def roles_summary() -> str:
+    """Список ролей с описанием — подсказка под полем «Роли» и в справке."""
+    return format_html_join(
+        "", "<p style='margin:0 0 6px'><b>{}</b> — {}</p>", ROLE_DESCRIPTIONS.items()
+    )
+
+
 @admin.register(User)
 class UserAdmin(PageHelpMixin, BaseUserAdmin, ModelAdmin):
     form = UserChangeForm
     add_form = UserCreationForm
     change_password_form = AdminPasswordChangeForm
 
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+        if "groups" in form.base_fields:
+            form.base_fields["groups"].help_text = format_html(
+                "<div style='margin-top:6px'>{}</div>", roles_summary()
+            )
+        return form
+
 
 @admin.register(Group)
 class GroupAdmin(PageHelpMixin, BaseGroupAdmin, ModelAdmin):
-    pass
+    list_display = ("name", "description_display")
+    readonly_fields = ("description_display",)
+    fields = ("name", "description_display", "permissions")
+
+    @display(description="За что отвечает")
+    def description_display(self, obj):
+        return role_description(obj.name) or "—"

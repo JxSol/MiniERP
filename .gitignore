@@ -23,3 +23,6 @@ Thumbs.db
 
 # Логи локального сервера
 runserver*.log
+
+# Дампы базы и фото
+/backup/
