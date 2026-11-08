@@ -224,3 +224,24 @@ def test_material_cipher_normalized_unique_and_searchable(client, admin_user, de
     assert 'data-cipher="001"' in add_page and "Подставить 001" in add_page
     edit_page = client.get(reverse("admin:catalog_material_change", args=[pla.pk])).content.decode()
     assert "Подставить" not in edit_page  # у материала шифр уже есть
+
+
+def test_color_hex_widget_and_normalization(client, admin_user):
+    """Палитра: рядом с полем HEX есть выбор цвета, а ввод «388e3c» и «#38c» приводится к #RRGGBB."""
+    from django.urls import reverse
+
+    from catalog.admin import normalize_hex
+    from catalog.models import Color
+
+    assert normalize_hex(" 388e3c ") == "#388E3C"
+    assert normalize_hex("#38c") == "#3388CC"
+    assert normalize_hex("#388E3C") == "#388E3C"
+    client.force_login(admin_user)
+    page = client.get(reverse("admin:catalog_color_add")).content.decode()
+    assert 'type="color"' in page and 'name="hex"' in page and "pipette" not in page
+    response = client.post(
+        reverse("admin:catalog_color_add"),
+        {"name": "Проверочный", "hex": "388e3c", "order": "99", "is_active": "on", "notes": ""},
+    )
+    assert response.status_code == 302, response.content.decode()[:500]
+    assert Color.objects.get(name="Проверочный").hex == "#388E3C"

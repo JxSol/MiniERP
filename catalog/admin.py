@@ -5,7 +5,7 @@ from django.contrib import admin
 from django.db.models import Avg, DecimalField, ExpressionWrapper, F, Q
 from django.utils.html import format_html, format_html_join, mark_safe
 from unfold.decorators import display
-from unfold.widgets import UnfoldAdminColorInputWidget, UnfoldAdminTextInputWidget
+from unfold.widgets import UnfoldAdminTextInputWidget
 
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
 from core.admin_utils import (
@@ -68,11 +68,65 @@ class MaterialCategoryAdmin(ArchiveAdmin):
 # --- Палитра, производители, поставщики ---------------------------------------------
 
 
+class ColorHexWidget(UnfoldAdminTextInputWidget):
+    """
+    Код цвета #RRGGBB, который можно вписать или вставить, плюс рядом выбор цвета браузера
+    (с палитрой и пипеткой). Оба поля связаны: что поменяли в одном, видно в другом.
+    """
+
+    def __init__(self, attrs=None):
+        super().__init__(
+            {
+                "maxlength": "7",
+                "placeholder": "#388E3C",
+                "spellcheck": "false",
+                "style": "width:9rem;font-family:monospace;text-transform:uppercase",
+                **(attrs or {}),
+            }
+        )
+
+    def render(self, name, value, attrs=None, renderer=None):
+        text_html = super().render(name, value, attrs, renderer)
+        picker_value = value if value and str(value).startswith("#") else "#888888"
+        return format_html(
+            '<div class="flex items-center gap-2">'
+            '<input type="color" value="{}" title="Выбрать цвет или взять пипеткой" '
+            'aria-label="Выбрать цвет" '
+            'class="h-[38px] w-12 cursor-pointer rounded-default border border-base-200 '
+            'bg-white p-1 dark:border-base-700 dark:bg-base-900" '
+            "oninput=\"const t = this.parentElement.querySelector('input[type=text]'); "
+            "t.value = this.value.toUpperCase(); t.dispatchEvent(new Event('input', {{bubbles: true}}));\">"
+            "{}"
+            "</div>"
+            "<script>(function () {{ const box = document.currentScript.previousElementSibling; "
+            "const text = box.querySelector('input[type=text]'); "
+            "const picker = box.querySelector('input[type=color]'); "
+            "text.addEventListener('input', () => {{ let v = text.value.trim(); "
+            "if (/^[0-9a-fA-F]{{6}}$/.test(v)) v = '#' + v; "
+            "if (/^#[0-9a-fA-F]{{6}}$/.test(v)) picker.value = v.toLowerCase(); }}); }})();</script>",
+            picker_value,
+            text_html,
+        )
+
+
+def normalize_hex(value: str) -> str:
+    """«388e3c», «#38c», « #388E3C » → «#388E3C»; остальное возвращается как есть."""
+    text = (value or "").strip().upper().replace("＃", "#")
+    if text and not text.startswith("#"):
+        text = "#" + text
+    if len(text) == 4 and all(c in "0123456789ABCDEF" for c in text[1:]):
+        text = "#" + "".join(c * 2 for c in text[1:])
+    return text
+
+
 class ColorForm(forms.ModelForm):
     class Meta:
         model = Color
         fields = ("name", "hex", "order", "is_active", "notes")
-        widgets = {"hex": UnfoldAdminColorInputWidget}
+        widgets = {"hex": ColorHexWidget}
+
+    def clean_hex(self):
+        return normalize_hex(self.cleaned_data.get("hex", ""))
 
 
 @admin.register(Color)
