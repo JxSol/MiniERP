@@ -5,7 +5,7 @@ from django.contrib import admin
 from django.db.models import Avg, DecimalField, ExpressionWrapper, F, Q
 from django.utils.html import format_html, format_html_join, mark_safe
 from unfold.decorators import display
-from unfold.widgets import UnfoldAdminColorInputWidget
+from unfold.widgets import UnfoldAdminColorInputWidget, UnfoldAdminTextInputWidget
 
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
 from core.admin_utils import (
@@ -105,6 +105,31 @@ class SupplierAdmin(ArchiveAdmin):
 # --- Материалы ---------------------------------------------------------------------
 
 
+class CipherWidget(UnfoldAdminTextInputWidget):
+    """Поле шифра с кнопкой «Подставить»: ближайший свободный шифр одним нажатием."""
+
+    def __init__(self, free: str = "", attrs=None):
+        super().__init__(attrs)
+        self.free = free
+
+    def render(self, name, value, attrs=None, renderer=None):
+        field_html = super().render(name, value, attrs, renderer)
+        if not self.free:
+            return field_html
+        return format_html(
+            '<div class="flex items-center gap-2">{}'
+            '<button type="button" data-cipher="{}" title="Ближайший свободный шифр" '
+            "onclick=\"const i = this.parentElement.querySelector('input'); "
+            "i.value = this.dataset.cipher; i.dispatchEvent(new Event('input', {{bubbles: true}}));\" "
+            'class="border border-base-200 rounded-default h-[38px] px-3 text-sm font-medium '
+            "whitespace-nowrap hover:text-primary-600 dark:border-base-700 "
+            'dark:hover:text-primary-500">Подставить {}</button></div>',
+            field_html,
+            self.free,
+            self.free,
+        )
+
+
 class MaterialAdminForm(ActiveChoicesForm):
     """Единица расхода нужна только обычной форме: остальным её задаёт форма учёта."""
 
@@ -117,9 +142,11 @@ class MaterialAdminForm(ActiveChoicesForm):
         self.fields["unit"].required = False
         free = next_free_cipher()
         if free and not self.instance.cipher:
-            self.fields["cipher"].help_text = (
-                f"Необязательно. Ближайший свободный: {free}. "
-                "Пишется на образцах вместо названия, чтобы посторонние не узнали материал."
+            cipher = self.fields["cipher"]
+            cipher.widget = CipherWidget(free=free, attrs=cipher.widget.attrs)
+            cipher.help_text = (
+                "Необязательно: впишите свой или нажмите «Подставить». Пишется на образцах "
+                "вместо названия, чтобы посторонние не узнали материал."
             )
 
     def clean(self):

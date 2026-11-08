@@ -220,3 +220,7 @@ def test_material_cipher_normalized_unique_and_searchable(client, admin_user, de
     client.force_login(admin_user)
     html = client.get(reverse("admin:catalog_material_changelist") + "?q=01A").content.decode()
     assert "PLA Basic, белый" in html and "PLA Basic, чёрный" not in html
+    add_page = client.get(reverse("admin:catalog_material_add")).content.decode()
+    assert 'data-cipher="001"' in add_page and "Подставить 001" in add_page
+    edit_page = client.get(reverse("admin:catalog_material_change", args=[pla.pk])).content.decode()
+    assert "Подставить" not in edit_page  # у материала шифр уже есть
