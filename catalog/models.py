@@ -3,6 +3,7 @@
 и поставщики, материалы с предложениями поставщиков, оборудование, типы операций.
 """
 
+import re
 from decimal import Decimal
 
 from django.conf import settings
@@ -224,6 +225,22 @@ class EnteredUnitMixin(models.Model):
         return fmt_quantity(qty, "шт")
 
 
+CIPHER_RE = re.compile(r"[0-9A-F]{3}")
+# Похожие кириллические буквы и «О» вместо нуля: шифр набирают на любой раскладке
+CIPHER_LOOKALIKES = str.maketrans("АВСЕОавсео", "ABCE0ABCE0")
+
+
+def normalize_cipher(value: str | None) -> str:
+    """«01a» → «01A», кириллические А/В/С/Е и О → латиница и ноль."""
+    return (value or "").strip().upper().translate(CIPHER_LOOKALIKES)
+
+
+def next_free_cipher() -> str:
+    """Наименьший свободный шифр от 001 до FFF."""
+    used = set(Material.objects.exclude(cipher="").values_list("cipher", flat=True))
+    return next((f"{n:03X}" for n in range(1, 0x1000) if f"{n:03X}" not in used), "")
+
+
 class Material(UniqueNameModel):
     """
     Конкретный материал, которым печатаем или который кладём в изделие:
@@ -245,6 +262,12 @@ class Material(UniqueNameModel):
         on_delete=models.PROTECT,
         related_name="materials",
         help_text="Для фанеры, шнуров и упаковки можно не указывать.",
+    )
+    cipher = models.CharField(
+        "Шифр",
+        max_length=3,
+        blank=True,
+        help_text="Пишется на образцах вместо названия, чтобы посторонние не узнали материал.",
     )
     form_type = models.CharField(
         "Форма учёта",
@@ -312,7 +335,12 @@ class Material(UniqueNameModel):
                 fields=["name_key", "color"],
                 name="catalog_material_name_uniq",
                 nulls_distinct=False,
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["cipher"],
+                condition=~models.Q(cipher=""),
+                name="catalog_material_cipher_uniq",
+            ),
         ]
 
     def __str__(self):
@@ -350,6 +378,11 @@ class Material(UniqueNameModel):
 
     def clean(self):
         super().clean()
+        self.cipher = normalize_cipher(self.cipher)
+        if self.cipher and not CIPHER_RE.fullmatch(self.cipher):
+            raise ValidationError(
+                {"cipher": "Шифр — ровно три знака из 0–9 и A–F, например 01A или F3C."}
+            )
         if self.form_type in FORM_UNITS:
             self.unit = FORM_UNITS[self.form_type]
         if self.form_type == MaterialForm.SHEET and not (self.width_cm and self.length_cm):

@@ -194,3 +194,29 @@ def test_material_pages_show_forms(client, admin_user, demo):
     listing = client.get(reverse("admin:stock_stockbalance_changelist")).content.decode()
     assert f"500{NBSP}пог. м (600{NBSP}м²)" in listing
     assert f"10{NBSP}лист (3,364{NBSP}м²)" in listing
+
+
+def test_material_cipher_normalized_unique_and_searchable(client, admin_user, demo):
+    """Шифр: три знака 0–9/A–F, кириллица и строчные приводятся, повтор не сохраняется, поиск работает."""
+    from django.urls import reverse
+
+    from catalog.models import next_free_cipher
+
+    pla = Material.objects.get(name="PLA Basic", color__name="Белый")
+    pla.cipher = "01а"  # строчная кириллическая «а»
+    pla.full_clean(exclude=["name_key"])
+    pla.save()
+    assert pla.cipher == "01A"
+    assert next_free_cipher() == "001"
+
+    other = Material.objects.get(name="PLA Basic", color__name="Чёрный")
+    other.cipher = "01A"
+    with pytest.raises(ValidationError):
+        other.full_clean(exclude=["name_key"])
+    other.cipher = "01G"
+    with pytest.raises(ValidationError, match="ровно три знака"):
+        other.full_clean(exclude=["name_key"])
+
+    client.force_login(admin_user)
+    html = client.get(reverse("admin:catalog_material_changelist") + "?q=01A").content.decode()
+    assert "PLA Basic, белый" in html and "PLA Basic, чёрный" not in html

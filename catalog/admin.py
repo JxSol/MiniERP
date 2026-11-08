@@ -30,6 +30,7 @@ from .models import (
     MaterialPriceHistory,
     OperationType,
     Supplier,
+    next_free_cipher,
 )
 
 # --- Категории материалов ----------------------------------------------------------
@@ -114,6 +115,12 @@ class MaterialAdminForm(ActiveChoicesForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["unit"].required = False
+        free = next_free_cipher()
+        if free and not self.instance.cipher:
+            self.fields["cipher"].help_text = (
+                f"Необязательно. Ближайший свободный: {free}. "
+                "Пишется на образцах вместо названия, чтобы посторонние не узнали материал."
+            )
 
     def clean(self):
         data = super().clean()
@@ -225,6 +232,7 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
     list_display = (
         "swatch",
         "full_name_display",
+        "cipher",
         "category",
         "unit_price_display",
         "offers_display",
@@ -232,7 +240,13 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
     )
     list_display_links = ("swatch", "full_name_display")
     list_filter = ("category__kind", "category", "color")
-    search_fields = ("name", "color__name", "offers__manufacturer__name", "offers__supplier__name")
+    search_fields = (
+        "name",
+        "color__name",
+        "cipher",
+        "offers__manufacturer__name",
+        "offers__supplier__name",
+    )
     autocomplete_fields = ("category", "color")
     inlines = (MaterialOfferInline, PriceHistoryInline)
     readonly_fields = ("size_display", "unit_price_display", "where_used")
@@ -244,6 +258,7 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
                 "fields": (
                     "name",
                     "color",
+                    "cipher",
                     "category",
                     "form_type",
                     "unit",
