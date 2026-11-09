@@ -3,11 +3,14 @@
 упаковка, перемещение, инвентаризация), остатки по вкладкам и движения по складу.
 """
 
+from collections import defaultdict
 from decimal import Decimal
 
 from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin import SimpleListFilter
+from django.core.exceptions import ValidationError
+from django.forms.models import BaseInlineFormSet
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
@@ -24,11 +27,15 @@ from catalog.models import Material, MaterialForm, Unit
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
 from core.admin_utils import (
     PageHelpMixin,
+    fmt_duration,
     fmt_money,
+    fmt_number,
     fmt_quantity,
     hx_redirect,
 )
 from core.forms import ActiveChoicesForm, QuantityUnitFormMixin
+from core.widgets import DurationMinutesField
+from production.models import Part, PartMaterial
 
 from . import reports
 from .models import (
@@ -39,6 +46,7 @@ from .models import (
     ItemKind,
     Packing,
     ProductionRun,
+    ProductionRunMaterial,
     ReasonDirection,
     Receipt,
     ReceiptLine,
@@ -53,9 +61,10 @@ from .models import (
     Warehouse,
     WriteOff,
     WriteOffLine,
+    balance_of,
 )
 
-ITEM_FIELDS = ("material", "part", "part_material", "variant", "product")
+ITEM_FIELDS = ("material", "part_coloring", "variant", "product")
 ZERO = Decimal(0)
 
 
@@ -88,7 +97,7 @@ def _item_link(obj) -> str:
 def _item_filter_query(obj) -> str:
     """Параметры фильтра журнала движений по этой позиции."""
     params = {}
-    for field in ("material", "part", "part_material", "variant", "product"):
+    for field in ("material", "part", "part_coloring", "variant", "product"):
         pk = getattr(obj, f"{field}_id")
         if pk:
             params[f"{field}__id__exact"] = pk
@@ -352,68 +361,298 @@ class ReceiptAdmin(DocumentAdmin):
 
 
 class ProductionRunForm(DocumentForm):
+    actual_minutes = DurationMinutesField(
+        label="Время фактически",
+        required=False,
+        help_text="Сколько шёл стол или лист на самом деле. Пусто — по норме детали.",
+    )
+
     class Meta:
         model = ProductionRun
         fields = (
             "date",
             "warehouse",
             "part",
-            "material",
             "equipment",
             "good_qty",
             "scrap_qty",
+            "actual_minutes",
             "notes",
         )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["material"].required = False
-        self.fields["material"].help_text = "Пусто — материал детали по умолчанию."
         self.fields["equipment"].required = False
         self.fields["equipment"].help_text = "Пусто — станок детали."
 
     def clean(self):
         data = super().clean()
         part = data.get("part")
-        if part:
-            data.setdefault("material", None)
-            data.setdefault("equipment", None)
-            if not data["material"]:
-                data["material"] = part.material
-            if not data["equipment"]:
-                data["equipment"] = part.equipment
+        if part and not data.get("equipment"):
+            data["equipment"] = part.equipment
         return data
+
+
+class PositionWidget(forms.Widget):
+    """
+    Позиция детали в строке выпуска: скрытое поле с id и подпись. Обычный HiddenInput
+    unfold выводит прямо в <tr>, и браузер выносит его за таблицу — строки, добавленные
+    скриптом, остаются без позиции.
+    """
+
+    def render(self, name, value, attrs=None, renderer=None):
+        label = ""
+        if value:
+            position = PartMaterial.objects.filter(pk=value).first()
+            label = position.label if position else ""
+        return format_html(
+            '<input type="hidden" name="{}" value="{}">'
+            '<span class="position-label font-medium whitespace-nowrap">{}</span>',
+            name,
+            value or "",
+            label,
+        )
+
+
+class ProductionRunMaterialForm(QuantityUnitFormMixin, ActiveChoicesForm):
+    class Meta:
+        model = ProductionRunMaterial
+        fields = ("position", "material", "quantity", "entered_unit")
+        widgets = {"position": PositionWidget}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["quantity"].required = False
+
+
+class ProductionRunMaterialFormSet(BaseInlineFormSet):
+    """Строки — по позициям детали из шапки; нехватка материала видна до сохранения."""
+
+    def clean(self):
+        super().clean()
+        run = self.instance
+        part = getattr(run, "part", None) if run.part_id else None
+        if part is None:
+            return
+        positions = {p.pk: p for p in part.positions}
+        needed: dict[int, Decimal] = defaultdict(lambda: Decimal(0))
+        materials = {}
+        seen = set()
+        for form in self.forms:
+            data = getattr(form, "cleaned_data", None)
+            if not data or data.get("DELETE"):
+                continue
+            position, material = data.get("position"), data.get("material")
+            if position is None or material is None:
+                continue
+            if position.pk not in positions:
+                raise ValidationError(f"Позиция «{position.label}» принадлежит другой детали.")
+            if position.pk in seen:
+                raise ValidationError(f"Позиция «{position.label}» указана дважды.")
+            seen.add(position.pk)
+            quantity = data.get("quantity")
+            needed[material.pk] += quantity if quantity else run.planned_qty(position)
+            materials[material.pk] = material
+        for position in positions.values():  # строк без позиции не бывает: остальные по норме
+            if position.pk not in seen:
+                needed[position.material_id] += run.planned_qty(position)
+                materials[position.material_id] = position.material
+        if not run.warehouse_id or not run.pieces:
+            return
+        shortages = []
+        for material_id, qty in needed.items():
+            material = materials[material_id]
+            have = balance_of(
+                run.warehouse_id,
+                (ItemKind.MATERIAL.value, material_id, None),
+                run if run.pk else None,
+            )
+            if have < qty:
+                shortages.append(
+                    f"{material}: есть {material.format_qty(have)}, нужно {material.format_qty(qty)}"
+                )
+        if shortages:
+            raise ValidationError(
+                f"Не хватает на складе «{run.warehouse}»: " + "; ".join(shortages) + "."
+            )
+
+
+class ProductionRunMaterialInline(LineInline):
+    model = ProductionRunMaterial
+    form = ProductionRunMaterialForm
+    formset = ProductionRunMaterialFormSet
+    autocomplete_fields = ("material",)
+    fields = ("position", "material", "quantity", "entered_unit", "planned_display")
+    readonly_fields = ("planned_display",)
+    can_delete = False
+    tab = False
+    verbose_name = "Материал"
+    verbose_name_plural = "Материалы: из чего печатали и сколько ушло"
+
+    class Media:
+        js = (
+            "admin/js/vendor/jquery/jquery.js",
+            "admin/js/jquery.init.js",
+            "stock/run_materials.js",
+        )
+
+    @display(description="По норме")
+    def planned_display(self, obj):
+        if not obj.pk or not obj.position_id:
+            return "—"
+        return obj.material.format_qty(obj.planned)
 
 
 @admin.register(ProductionRun)
 class ProductionRunAdmin(DocumentAdmin):
     form = ProductionRunForm
+    inlines = (ProductionRunMaterialInline,)
     list_display = (
         "number",
         "date",
         "part",
-        "material",
+        "materials_display",
         "equipment",
         "good_qty",
         "scrap_qty",
+        "cost_per_piece_display",
         "status_badge",
     )
     list_filter = ("status", "warehouse", "equipment", "part")
-    search_fields = ("number", "part__name", "material__name")
-    autocomplete_fields = ("part", "material", "equipment")
+    search_fields = ("number", "part__name", "materials__material__name")
+    autocomplete_fields = ("part", "equipment")
+    actions_detail = ("cancel_document", "make_norm")
+    readonly_fields = (*DocumentAdmin.readonly_fields, "norm_display", "cost_display")
     fields = (
         "number",
         "date",
         "warehouse",
         "part",
-        "material",
+        "norm_display",
         "equipment",
         ("good_qty", "scrap_qty"),
+        "actual_minutes",
+        "cost_display",
         "status_display",
         "notes",
         "created_by",
         "posted_at",
     )
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = list(super().get_readonly_fields(request, obj))
+        if obj is not None and obj.pk:
+            fields.append("part")  # другая деталь — другой документ
+        return fields
+
+    def get_queryset(self, request):
+        return (
+            super()
+            .get_queryset(request)
+            .select_related("part", "equipment", "warehouse")
+            .prefetch_related("materials__material__color", "materials__position")
+        )
+
+    def get_urls(self):
+        info = path(
+            "part-info/<int:pk>/",
+            self.admin_site.admin_view(self.part_info),
+            name="stock_productionrun_part_info",
+        )
+        return [info, *super().get_urls()]
+
+    def part_info(self, request, pk):
+        """Станок и позиции детали для подстановки строк материалов (JS)."""
+        part = get_object_or_404(
+            Part.objects.select_related("equipment").prefetch_related("materials__material__color"),
+            pk=pk,
+        )
+        return JsonResponse(
+            {
+                "equipment": part.equipment_id,
+                "equipment_text": str(part.equipment),
+                "positions": [
+                    {
+                        "id": p.pk,
+                        "label": p.label,
+                        "material": p.material_id,
+                        "material_text": str(p.material),
+                        "unit": p.material.get_unit_display(),
+                        "per_piece": f"{p.per_piece.quantize(Decimal('0.0001')).normalize():f}",
+                    }
+                    for p in part.positions
+                ],
+            }
+        )
+
+    @display(description="Материалы")
+    def materials_display(self, obj):
+        rows = obj.material_rows()
+        if not rows:
+            return "по норме детали"
+        return "; ".join(f"{row.material}: {row.material.format_qty(row.used)}" for row in rows)
+
+    @display(description="Норма детали")
+    def norm_display(self, obj):
+        if not obj.part_id:
+            return "Подставится по выбранной детали"
+        part = obj.part
+        materials = ", ".join(
+            f"{p.label}: {p.material.format_qty(p.batch_qty)}"
+            if len(part.positions) > 1
+            else p.material.format_qty(p.batch_qty)
+            for p in part.positions
+        )
+        return (
+            f"Типовая партия: {part.batch_size} шт за {fmt_duration(part.batch_minutes)}, "
+            f"материалы: {materials}"
+        )
+
+    @display(description="Себестоимость 1 шт", ordering="cost_per_piece")
+    def cost_per_piece_display(self, obj):
+        return fmt_money(obj.cost_per_piece) if obj.cost_per_piece is not None else "—"
+
+    @display(description="Себестоимость по факту")
+    def cost_display(self, obj):
+        if obj.cost_per_piece is None:
+            return "Посчитается при проведении"
+        text = f"партия {fmt_money(obj.cost_total)}, за 1 шт {fmt_money(obj.cost_per_piece)}"
+        norm = obj.norm_cost_per_piece
+        if norm:
+            diff = (obj.cost_per_piece / norm - 1) * 100
+            sign = "+" if diff > 0 else ""
+            text += f"; по норме {fmt_money(norm)} ({sign}{fmt_number(diff.quantize(Decimal('0.1')))} %)"
+        return text
+
+    def has_make_norm_permission(self, request, object_id=None):
+        return request.user.has_perm("production.change_part")
+
+    @action(
+        description="Сделать нормой детали",
+        icon="rule",
+        url_path="make-norm",
+        permissions=["make_norm"],
+        dialog={
+            "title": "Сделать нормой детали",
+            "description": "Типовая партия детали станет такой, как в этом выпуске: столько же "
+            "штук, столько времени и столько материала по каждой позиции (фактически или по "
+            "норме, если факт не записан). Себестоимость детали и всего, куда она входит, "
+            "пересчитается.",
+            "form_submit_text": "Сделать нормой",
+        },
+    )
+    def make_norm(self, request, form, object_id):
+        run = get_object_or_404(ProductionRun, pk=object_id)
+        if run.status != DocumentStatus.POSTED:
+            messages.error(request, "Нормой можно сделать только проведённый выпуск.")
+        else:
+            run.apply_as_norm()
+            messages.success(
+                request,
+                f"Норма детали «{run.part}» обновлена: {run.pieces} шт за "
+                f"{fmt_duration(run.minutes)}; {run.materials_summary()}.",
+            )
+        return hx_redirect(request, reverse("admin:stock_productionrun_change", args=[object_id]))
 
 
 # --- Сборка и упаковка -------------------------------------------------------------
@@ -461,17 +700,15 @@ class PackingAdmin(DocumentAdmin):
 
 
 class ItemLineForm(QuantityUnitFormMixin, ActiveChoicesForm):
-    """Строка с позицией: материал, деталь + материал, изделие или товар."""
+    """Строка с позицией: материал, деталь с расцветкой, изделие или товар."""
 
     def clean(self):
         data = super().clean()
-        filled = [f for f in ("material", "part", "variant", "product") if data.get(f)]
+        filled = [f for f in ITEM_FIELDS if data.get(f)]
         if len(filled) != 1:
             raise forms.ValidationError(
                 "В строке укажите ровно одну позицию: материал, деталь, изделие или товар."
             )
-        if data.get("part") and not data.get("part_material"):
-            self.add_error("part_material", "Для детали укажите материал (цвет).")
         return data
 
 
@@ -590,6 +827,7 @@ class AdjustmentAdmin(DocumentAdmin):
         "number",
         "lines__material__name",
         "lines__part__name",
+        "lines__part_coloring__label",
         "lines__variant__name",
         "lines__variant__model__name",
         "lines__product__name",
@@ -614,7 +852,7 @@ class AdjustmentAdmin(DocumentAdmin):
             .prefetch_related(
                 "lines__material__color",
                 "lines__part",
-                "lines__part_material__color",
+                "lines__part_coloring",
                 "lines__variant__model",
                 "lines__product",
             )
@@ -740,7 +978,7 @@ class StockBalanceAdmin(ReadOnlyAdmin):
         "material__name",
         "material__color__name",
         "part__name",
-        "part_material__name",
+        "part_coloring__label",
         "variant__name",
         "variant__model__name",
         "product__name",
@@ -777,7 +1015,7 @@ class StockBalanceAdmin(ReadOnlyAdmin):
                 "warehouse",
                 "material__color",
                 "part",
-                "part_material__color",
+                "part_coloring__part",
                 "variant__model",
                 "product",
             )
@@ -805,7 +1043,7 @@ class StockBalanceAdmin(ReadOnlyAdmin):
                     for f in (
                         "material_id",
                         "part_id",
-                        "part_material_id",
+                        "part_coloring_id",
                         "variant_id",
                         "product_id",
                     )
@@ -886,6 +1124,7 @@ class StockMoveAdmin(ReadOnlyAdmin):
     search_fields = (
         "material__name",
         "part__name",
+        "part_coloring__label",
         "variant__name",
         "variant__model__name",
         "product__name",
@@ -901,7 +1140,7 @@ class StockMoveAdmin(ReadOnlyAdmin):
                 "warehouse",
                 "material__color",
                 "part",
-                "part_material__color",
+                "part_coloring__part",
                 "variant__model",
                 "product",
             )

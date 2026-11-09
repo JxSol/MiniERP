@@ -18,6 +18,7 @@ from .models import (
     ModelOperation,
     ModelPart,
     Part,
+    PartMaterial,
     PartOperation,
     ProductModel,
     Variant,
@@ -199,7 +200,7 @@ def create_size(model: ProductModel, size: Size) -> ProductModel:
     )
     copy.tags.set(base.tags.all())
     for line in base.model_parts.all():
-        ModelPart.objects.create(model=copy, part=line.part, quantity=line.quantity, slot=line.slot)
+        ModelPart.objects.create(model=copy, part=line.part, quantity=line.quantity)
     for line in base.components.all():
         ModelComponent.objects.create(model=copy, material=line.material, quantity=line.quantity)
     for line in base.operations.all():
@@ -231,14 +232,22 @@ def copy_part(part: Part, equipment: Equipment | None = None) -> Part:
     copy = Part.objects.create(
         name=f"{part.name} (копия {n})",
         equipment=equipment or part.equipment,
-        material=part.material,
-        batch_material_qty=part.batch_material_qty,
         batch_minutes=part.batch_minutes,
         batch_size=part.batch_size,
         scrap_percent=part.scrap_percent,
         model_url=part.model_url,
         print_params=part.print_params,
     )
+    for position in part.positions:
+        PartMaterial.objects.create(
+            part=copy,
+            order=position.order,
+            name=position.name,
+            material=position.material,
+            batch_qty=position.batch_qty,
+            batch_unit=position.batch_unit,
+            slot=position.slot,
+        )
     for op in part.operations.all():
         PartOperation.objects.create(
             part=copy, operation_type=op.operation_type, minutes=op.minutes, rate=op.rate

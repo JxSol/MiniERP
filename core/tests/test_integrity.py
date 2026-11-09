@@ -26,13 +26,12 @@ def test_archived_material_keeps_existing_part_valid(client, admin_user, demo):
     from production.models import Part
 
     shade = Part.objects.get(name="Плафон Луна")
+    position = shade.main_position
     client.force_login(admin_user)
     url = reverse("admin:production_part_change", args=[shade.pk])
     data = {
         "name": shade.name,
         "equipment": shade.equipment_id,
-        "material": pla.pk,
-        "batch_material_qty": "250",
         "batch_minutes_0": "0",
         "batch_minutes_1": "8",
         "batch_minutes_2": "0",
@@ -40,6 +39,15 @@ def test_archived_material_keeps_existing_part_valid(client, admin_user, demo):
         "batch_size": "1",
         "is_active": "on",
         "notes": "изменено",
+        "materials-TOTAL_FORMS": "1",
+        "materials-INITIAL_FORMS": "1",
+        "materials-MIN_NUM_FORMS": "1",
+        "materials-0-id": position.pk,
+        "materials-0-name": "",
+        "materials-0-material": pla.pk,
+        "materials-0-batch_qty": "250",
+        "materials-0-batch_unit": "",
+        "materials-0-slot": "Плафон",
         "operations-TOTAL_FORMS": "0",
         "operations-INITIAL_FORMS": "0",
         "photos-TOTAL_FORMS": "0",
@@ -48,11 +56,16 @@ def test_archived_material_keeps_existing_part_valid(client, admin_user, demo):
     response = client.post(url, data)
     assert response.status_code == 302, response.content.decode()[:500]
     shade.refresh_from_db()
-    assert shade.notes == "изменено" and shade.material_id == pla.pk
+    assert shade.notes == "изменено" and shade.material.pk == pla.pk
     # а в автокомплите архивный материал уже не предлагается
     search = client.get(
         reverse("admin:autocomplete"),
-        {"app_label": "production", "model_name": "part", "field_name": "material", "term": "PLA"},
+        {
+            "app_label": "production",
+            "model_name": "partmaterial",
+            "field_name": "material",
+            "term": "PLA",
+        },
     ).json()
     assert all("белый" not in r["text"] for r in search["results"])
 
@@ -61,8 +74,10 @@ def test_slot_rename_keeps_variant_colors(demo):
     luna = ProductModel.objects.get(name="Светильник Луна")
     gold = Variant.objects.get(model=luna, name="Золотой")
     before = snapshot_slots(luna)
-    luna.model_parts.filter(slot="Плафон").update(slot="Корпус")
+    from production.models import PartMaterial
     from production.services import sync_model_slots
+
+    PartMaterial.objects.filter(part__model_lines__model=luna, slot="Плафон").update(slot="Корпус")
 
     sync_model_slots(luna)
     gold.refresh_from_db()

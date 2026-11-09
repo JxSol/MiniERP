@@ -25,14 +25,14 @@ def totals_by_item(*, showcase: bool | None = None) -> dict[tuple, Decimal]:
     if showcase is not None:
         qs = qs.filter(warehouse__is_showcase=showcase)
     rows = qs.values(
-        "material_id", "part_id", "part_material_id", "variant_id", "product_id"
+        "material_id", "part_id", "part_coloring_id", "variant_id", "product_id"
     ).annotate(total=Sum("quantity"))
     result = {}
     for r in rows:
         if r["material_id"]:
             key = ("material", r["material_id"], None)
         elif r["part_id"]:
-            key = ("part", r["part_id"], r["part_material_id"])
+            key = ("part", r["part_id"], r["part_coloring_id"])
         elif r["variant_id"]:
             key = ("variant", r["variant_id"], None)
         else:

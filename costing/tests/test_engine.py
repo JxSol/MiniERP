@@ -51,7 +51,7 @@ def money(value: D) -> D:
 def shade(pla_price: D) -> PartSpec:
     return PartSpec(
         name="Плафон",
-        material=MaterialUse("PLA", D(250), "г", pla_price),
+        materials=(MaterialUse("PLA", D(250), "г", pla_price),),
         machine=PRINTER,
         batch_minutes=D(480),
         batch_size=1,
@@ -62,7 +62,7 @@ def shade(pla_price: D) -> PartSpec:
 
 BASE = PartSpec(
     name="Подставка",
-    material=MaterialUse("Фанера 4 мм", D(1), "лист", D(2400)),
+    materials=(MaterialUse("Фанера 4 мм", D(1), "лист", D(2400)),),
     machine=LASER,
     batch_minutes=D(12),
     batch_size=4,
@@ -74,7 +74,7 @@ BASE = PartSpec(
 def fixator(pla_price: D) -> PartSpec:
     return PartSpec(
         name="Фиксатор",
-        material=MaterialUse("PLA", D(50), "г", pla_price),
+        materials=(MaterialUse("PLA", D(50), "г", pla_price),),
         machine=PRINTER,
         batch_minutes=D(120),
         batch_size=10,

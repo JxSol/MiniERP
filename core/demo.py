@@ -27,10 +27,20 @@ from production.models import (
     ModelOperation,
     ModelPart,
     Part,
+    PartMaterial,
     PartOperation,
     ProductCategory,
     ProductModel,
 )
+
+
+def _part(name, equipment, material, batch_qty, batch_minutes, batch_size, *, slot=""):
+    """Деталь с одной позицией материала и типовой партией."""
+    part = Part.objects.create(
+        name=name, equipment=equipment, batch_minutes=D(batch_minutes), batch_size=batch_size
+    )
+    PartMaterial.objects.create(part=part, material=material, batch_qty=D(batch_qty), slot=slot)
+    return part
 
 
 def _category(name: str) -> MaterialCategory:
@@ -179,32 +189,11 @@ def load_demo() -> dict:
         scrap_percent=D(2),
     )
 
-    shade = Part.objects.create(
-        name="Плафон Луна",
-        equipment=printer,
-        material=pla_white,
-        batch_material_qty=D(250),
-        batch_minutes=D(480),
-        batch_size=1,
-    )
+    shade = _part("Плафон Луна", printer, pla_white, 250, 480, 1, slot="Плафон")
     PartOperation.objects.create(part=shade, operation_type=_op("Снятие поддержек"), minutes=D(5))
-    base = Part.objects.create(
-        name="Подставка Луна",
-        equipment=laser,
-        material=plywood,
-        batch_material_qty=D(1),
-        batch_minutes=D(12),
-        batch_size=4,
-    )
+    base = _part("Подставка Луна", laser, plywood, 1, 12, 4)  # фанера: цвет не меняется
     PartOperation.objects.create(part=base, operation_type=_op("Шлифовка"), minutes=D(2))
-    fixator = Part.objects.create(
-        name="Фиксатор плафона",
-        equipment=printer,
-        material=pla_white,
-        batch_material_qty=D(50),
-        batch_minutes=D(120),
-        batch_size=10,
-    )
+    fixator = _part("Фиксатор плафона", printer, pla_white, 50, 120, 10, slot="Плафон")
 
     lamps = ProductCategory.objects.get(name="Настольные светильники")  # код LT из сида
     luna = ProductModel.objects.create(
@@ -213,9 +202,9 @@ def load_demo() -> dict:
         default_packaging=box,
         default_packing_minutes=D(5),
     )
-    ModelPart.objects.create(model=luna, part=shade, quantity=1, slot="Плафон")
+    ModelPart.objects.create(model=luna, part=shade, quantity=1)
     ModelPart.objects.create(model=luna, part=base, quantity=1)
-    ModelPart.objects.create(model=luna, part=fixator, quantity=2, slot="Плафон")
+    ModelPart.objects.create(model=luna, part=fixator, quantity=2)
     ModelComponent.objects.create(model=luna, material=cord, quantity=D(1))
     ModelComponent.objects.create(model=luna, material=socket, quantity=D(1))
     # винты в демо считаются по 15 ₸ за штуку (упаковка 100 шт за 1 500 ₸)
@@ -225,14 +214,7 @@ def load_demo() -> dict:
     generators.create_material_variants(luna, [pla_white, pla_black, silk_gold])
 
     # Ёлочный шар: поштучно и наборами
-    ball_part = Part.objects.create(
-        name="Корпус шара 6 см",
-        equipment=printer,
-        material=pla_red,
-        batch_material_qty=D(120),
-        batch_minutes=D(240),
-        batch_size=8,
-    )
+    ball_part = _part("Корпус шара 6 см", printer, pla_red, 120, 240, 8, slot="Корпус")
     newyear = ProductCategory.objects.get(name="Ёлочные игрушки")  # код NT из сида
     ball = ProductModel.objects.create(
         name="Ёлочный шар",
@@ -240,7 +222,7 @@ def load_demo() -> dict:
         default_packaging=small_box,
         default_packing_minutes=D(1),
     )
-    ModelPart.objects.create(model=ball, part=ball_part, quantity=1, slot="Корпус")
+    ModelPart.objects.create(model=ball, part=ball_part, quantity=1)
     generators.create_material_variants(
         ball, [pla_red, pla_green, pla_violet, silk_gold], add_random=True
     )
@@ -329,14 +311,12 @@ def load_demo_stock() -> None:
         ("Подставка Луна", 4, 0),
     ):
         part = Part.objects.get(name=part_name)
-        ProductionRun.objects.create(
-            warehouse=workshop,
-            part=part,
-            equipment=part.equipment,
-            material=white if part.material.name == "PLA Basic" else part.material,
-            good_qty=good,
-            scrap_qty=scrap,
-        ).post()
+        run = ProductionRun.objects.create(
+            warehouse=workshop, part=part, equipment=part.equipment, good_qty=good, scrap_qty=scrap
+        )
+        if part.material.name == "PLA Basic":
+            run.materials.create(position=part.main_position, material=white)
+        run.post()
 
     Assembly.objects.create(
         warehouse=workshop, variant=variant_of(luna, "Белый"), quantity=2

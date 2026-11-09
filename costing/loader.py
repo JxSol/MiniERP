@@ -41,7 +41,9 @@ class Catalog:
         self._line_prices: dict[tuple[int, str], Decimal | None] = {}
         self.equipment = {e.pk: e for e in Equipment.objects.all()}
         self.operation_types = {o.pk: o for o in OperationType.objects.all()}
-        self.parts = {p.pk: p for p in Part.objects.prefetch_related("operations")}
+        self.parts = {
+            p.pk: p for p in Part.objects.prefetch_related("operations", "materials__material")
+        }
         self.models = {
             m.pk: m
             for m in ProductModel.objects.prefetch_related(
@@ -121,13 +123,27 @@ class Catalog:
     # --- Спецификации ---
 
     def part_spec(
-        self, part: Part, material_id: int | None = None, *, any_color: bool = False
+        self,
+        part: Part,
+        slot_materials: dict[str, int] | None = None,
+        *,
+        random: bool = False,
     ) -> PartSpec:
+        """Деталь с материалами варианта по группам; без варианта — материалы по умолчанию."""
+        slot_materials = slot_materials or {}
+        uses = []
+        for position in part.positions:
+            material_id = slot_materials.get(position.slot) if position.slot else None
+            uses.append(
+                self.material_use(
+                    material_id or position.material_id,
+                    position.batch_qty,
+                    any_color=random and bool(position.slot),
+                )
+            )
         return PartSpec(
             name=part.name,
-            material=self.material_use(
-                material_id or part.material_id, part.batch_material_qty, any_color=any_color
-            ),
+            materials=tuple(uses),
             machine=self.machine(part.equipment_id),
             batch_minutes=part.batch_minutes,
             batch_size=part.batch_size,
@@ -140,14 +156,7 @@ class Catalog:
         slot_materials = {s.slot: s.material_id for s in variant.slots.all()} if variant else {}
         random = bool(variant and variant.coloring == Coloring.RANDOM)
         parts = tuple(
-            (
-                self.part_spec(
-                    self.parts[line.part_id],
-                    slot_materials.get(line.slot),
-                    any_color=random and bool(line.slot),
-                ),
-                line.quantity,
-            )
+            (self.part_spec(self.parts[line.part_id], slot_materials, random=random), line.quantity)
             for line in model.model_parts.all()
         )
         return VariantSpec(

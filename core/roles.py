@@ -55,6 +55,7 @@ REFERENCE_MODELS = [
     "catalog.operationtype",
     "catalog.materialpricehistory",
     "production.productcategory",
+    "production.partcoloring",
     "stock.warehouse",
     "stock.stockreason",
     "stock.stockbalance",
@@ -81,6 +82,7 @@ WORK_MODELS = [
 # Строки внутри основных записей: можно и удалять (убрать деталь из модели и т. п.)
 LINE_MODELS = [
     "catalog.materialoffer",
+    "production.partmaterial",
     "production.partoperation",
     "production.modelpart",
     "production.modelcomponent",
@@ -91,6 +93,7 @@ LINE_MODELS = [
     "sales.productoperation",
     "gallery.photo",
     "stock.receiptline",
+    "stock.productionrunmaterial",
     "stock.transferline",
     "stock.inventoryline",
     "stock.receivingline",
@@ -145,6 +148,8 @@ def sync_groups(**kwargs):
                     "production.productmodel",
                     "production.variant",
                     "production.part",
+                    "production.partmaterial",
+                    "production.partcoloring",
                     "gallery.photo",
                 ],
                 ["view"],

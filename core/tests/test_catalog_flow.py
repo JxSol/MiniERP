@@ -221,7 +221,6 @@ def test_technology_change_is_a_new_part(demo):
     shade = Part.objects.get(name="Плафон Луна")
     laser = Equipment.objects.get(name="Лазер CO₂ 60 Вт")
     shade.equipment = laser
-    shade.material = Material.objects.get(name="Фанера 4 мм")
     with pytest.raises(ValidationError, match="новая деталь"):
         shade.full_clean()
     copy = generators.copy_part(Part.objects.get(name="Плафон Луна"), laser)

@@ -9,6 +9,7 @@ from django.forms.models import BaseInlineFormSet
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.utils.html import format_html, format_html_join
+from unfold.admin import ModelAdmin
 from unfold.decorators import action, display
 from unfold.forms import BaseDialogForm
 from unfold.widgets import (
@@ -23,6 +24,7 @@ from catalog.models import Equipment, Material, MaterialKind
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
 from core.admin_utils import (
     CostVisibilityMixin,
+    PageHelpMixin,
     can_view_cost,
     color_swatch,
     fmt_duration,
@@ -49,13 +51,18 @@ from .models import (
     ModelOperation,
     ModelPart,
     Part,
+    PartColoring,
+    PartMaterial,
     PartOperation,
     ProductCategory,
     ProductModel,
     Variant,
     VariantSlot,
     clean_slot,
+    slot_conflicts,
 )
+
+DEFAULT_SLOT = "Основной"
 
 
 def _admin_url(obj, action="change"):
@@ -90,18 +97,72 @@ class CopyPartForm(BaseDialogForm):
     )
 
 
-class PartForm(QuantityUnitFormMixin, ActiveChoicesForm):
-    quantity_field = "batch_material_qty"
-    unit_field = "batch_material_unit"
-
+class PartForm(ActiveChoicesForm):
     batch_minutes = DurationMinutesField(
-        label="Время на партию",
+        label="Время типовой партии",
         help_text="Сколько идёт один стол или один лист — как показывает слайсер или программа лазера.",
     )
 
     class Meta:
         model = Part
         fields = "__all__"
+
+
+class PartMaterialForm(QuantityUnitFormMixin, ActiveChoicesForm):
+    quantity_field = "batch_qty"
+    unit_field = "batch_unit"
+
+    class Meta:
+        model = PartMaterial
+        fields = ("name", "material", "batch_qty", "batch_unit", "slot")
+
+
+class PartMaterialFormSet(BaseInlineFormSet):
+    """Первая позиция новой детали сразу в группе «Основной»; позиции нумеруются по порядку."""
+
+    def __init__(self, *args, **kwargs):
+        instance = kwargs.get("instance")
+        if instance is None or not instance.pk:
+            kwargs.setdefault("initial", [{"slot": DEFAULT_SLOT}])
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+        order = 0
+        for form in self.forms:
+            if not getattr(form, "cleaned_data", None):
+                continue
+            if form.cleaned_data.get("DELETE"):
+                if form.instance.pk and form.instance.coloring_items.exists():
+                    raise ValidationError(
+                        f"Позицию «{form.instance.label}» удалить нельзя: из неё уже делали "
+                        "детали, она есть в остатках и истории."
+                    )
+                continue
+            order += 1
+            form.instance.order = order
+
+
+class PartMaterialInline(LineInline):
+    model = PartMaterial
+    form = PartMaterialForm
+    formset = PartMaterialFormSet
+    autocomplete_fields = ("material",)
+    fields = ("name", "material", "batch_qty", "batch_unit", "slot", "per_piece_display")
+    readonly_fields = ("per_piece_display",)
+    min_num = 1
+    validate_min = True
+    tab = False
+    verbose_name = "Материал"
+    verbose_name_plural = "Материалы на типовую партию"
+
+    @display(description="На 1 шт")
+    def per_piece_display(self, obj):
+        if not obj.pk:
+            return "—"
+        return fmt_quantity(
+            obj.per_piece.quantize(Decimal("0.01")), obj.material.get_unit_display()
+        )
 
 
 class PartOperationInline(LineInline):
@@ -117,16 +178,23 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
         "name",
         "code",
         "equipment",
-        "material",
+        "material_display",
         "per_piece_display",
         "cost_display",
         "is_active",
     )
-    list_filter = ("equipment", "material__category")
+    list_filter = ("equipment", "materials__material__category")
     search_fields = ("name", "code")
-    autocomplete_fields = ("equipment", "material")
-    inlines = (PartOperationInline, PartPhotoInline)
-    readonly_fields = ("code", "per_piece_display", "scrap_display", "cost_tree", "used_in")
+    autocomplete_fields = ("equipment",)
+    inlines = (PartMaterialInline, PartOperationInline, PartPhotoInline)
+    readonly_fields = (
+        "code",
+        "per_piece_display",
+        "scrap_display",
+        "cost_tree",
+        "used_in",
+        "colorings_display",
+    )
     cost_fields = ("cost_display", "cost_tree")
     actions_detail = ("copy_part",)
     fieldsets = (
@@ -138,9 +206,7 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
                     "name",
                     "code",
                     "equipment",
-                    "material",
-                    ("batch_material_qty", "batch_material_unit", "batch_size"),
-                    "batch_minutes",
+                    ("batch_size", "batch_minutes"),
                     "per_piece_display",
                     ("scrap_percent", "scrap_display"),
                     "is_active",
@@ -152,18 +218,67 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
             {"classes": ["tab"], "fields": ("model_file", "model_url", "print_params", "notes")},
         ),
         ("Себестоимость", {"classes": ["tab"], "fields": ("cost_tree",)}),
-        ("Где используется", {"classes": ["tab"], "fields": ("used_in",)}),
+        ("Где используется", {"classes": ["tab"], "fields": ("used_in", "colorings_display")}),
     )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("materials__material__color")
+
+    @display(description="Материал")
+    def material_display(self, obj):
+        positions = obj.positions
+        if not positions:
+            return "—"
+        text = str(positions[0].material)
+        return f"{text} + ещё {len(positions) - 1}" if len(positions) > 1 else text
 
     @display(description="На 1 шт")
     def per_piece_display(self, obj):
         if not obj.pk:
             return "Посчитается после сохранения"
+        positions = obj.positions
+        parts = []
+        for position in positions:
+            qty = fmt_quantity(
+                position.per_piece.quantize(Decimal("0.01")), position.material.get_unit_display()
+            )
+            parts.append(f"{position.label}: {qty}" if len(positions) > 1 else qty)
         minutes = obj.batch_minutes / obj.batch_size
+        return f"{' + '.join(parts)}, {fmt_duration(minutes)}"
+
+    @display(description="Расцветки (из чего уже делали)")
+    def colorings_display(self, obj):
+        if not obj.pk:
+            return "—"
+        labels = list(obj.colorings.values_list("label", flat=True))
         return (
-            f"{fmt_quantity(obj.material_per_piece.quantize(Decimal('0.01')), obj.material.get_unit_display())}, "
-            f"{fmt_duration(minutes)}"
+            format_html_join("", "<p>{}</p>", ((label,) for label in labels))
+            or "Пока нет: появятся из вариантов и выпусков"
         )
+
+    def save_related(self, request, form, formsets, change):
+        """Переименование цветовой группы не должно стирать цвета вариантов (см. services)."""
+        part = form.instance
+        models = [line.model for line in part.model_lines.select_related("model")] if change else []
+        before = {model.pk: services.snapshot_slots(model) for model in models}
+        renames: dict[str, str] = {}
+        for formset in formsets:
+            if formset.model is not PartMaterial:
+                continue
+            for line_form in formset.forms:
+                if not getattr(line_form, "cleaned_data", None) or line_form.cleaned_data.get(
+                    "DELETE"
+                ):
+                    continue
+                old = clean_slot(line_form.initial.get("slot") or "")
+                new = clean_slot(line_form.cleaned_data.get("slot") or "")
+                if old and new and old != new:
+                    renames[old] = new
+        super().save_related(request, form, formsets, change)
+        for model in models:
+            still_present = set(model.slot_names())
+            pending = {o: n for o, n in renames.items() if o not in still_present}
+            services.restore_renamed_slots(model, before[model.pk], pending)
 
     @display(description="% брака (итоговый)")
     def scrap_display(self, obj):
@@ -230,33 +345,36 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
 
 
 class ModelPartFormSet(BaseInlineFormSet):
-    """Детали одного слота должны быть из одной категории материалов."""
+    """Детали одной цветовой группы должны быть из одной категории материалов."""
 
     def clean(self):
         super().clean()
-        categories: dict[str, tuple] = {}
-        for form in self.forms:
-            if not hasattr(form, "cleaned_data") or form.cleaned_data.get("DELETE"):
-                continue
-            part = form.cleaned_data.get("part")
-            slot = clean_slot(form.cleaned_data.get("slot") or "")
-            if not part or not slot:
-                continue
-            category = part.material.category
-            if slot in categories and categories[slot][0] != category.pk:
-                raise ValidationError(
-                    f"В слоте «{slot}» детали из разных категорий: «{categories[slot][1]}» и "
-                    f"«{category}». Разнесите их по разным слотам."
-                )
-            categories[slot] = (category.pk, category)
+        parts = [
+            form.cleaned_data["part"]
+            for form in self.forms
+            if getattr(form, "cleaned_data", None)
+            and not form.cleaned_data.get("DELETE")
+            and form.cleaned_data.get("part")
+        ]
+        problems = slot_conflicts(parts)
+        if problems:
+            raise ValidationError(" ".join(problems))
 
 
 class ModelPartInline(LineInline):
     model = ModelPart
     formset = ModelPartFormSet
     autocomplete_fields = ("part",)
-    fields = ("part", "quantity", "slot")
+    fields = ("part", "quantity", "groups_display")
+    readonly_fields = ("groups_display",)
     verbose_name_plural = "Детали"
+
+    @display(description="Цветовые группы")
+    def groups_display(self, obj):
+        if not obj.pk:
+            return "—"
+        names = obj.part.slot_names()
+        return ", ".join(names) if names else "цвет не меняется"
 
 
 class ModelComponentForm(QuantityUnitFormMixin, ActiveChoicesForm):
@@ -391,6 +509,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
         "article_base",
         "main_photo_display",
         "calculated_weight_display",
+        "slots_overview",
         "variants_overview",
         "products_overview",
         "sizes_overview",
@@ -410,6 +529,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
                     "category",
                     "tags",
                     "status",
+                    "slots_overview",
                     "description",
                     ("weight_g", "calculated_weight_display"),
                     ("length_cm", "width_cm", "height_cm"),
@@ -474,6 +594,22 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
     def calculated_weight_display(self, obj):
         weight = obj.calculated_weight_g() if obj.pk else None
         return fmt_quantity(weight, "г") if weight is not None else "—"
+
+    @display(description="Цветовые группы")
+    def slots_overview(self, obj):
+        if not obj.pk:
+            return "Появятся после сохранения: собираются из деталей состава."
+        positions = obj.slot_positions()
+        if not positions:
+            return "Нет: у всех деталей цвет фиксирован. Группа задаётся в карточке детали."
+        rows = []
+        for slot, pairs in positions.items():
+            names = dict.fromkeys(
+                f"{line.part.name} ({position.label})" if position.name else line.part.name
+                for line, position in pairs
+            )
+            rows.append(format_html("<b>{}</b>: {}", slot, ", ".join(names)))
+        return format_html("<br>".join(["{}"] * len(rows)), *rows)
 
     @display(description="Варианты модели")
     def variants_overview(self, obj):
@@ -552,29 +688,6 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
         if not obj.pk:
             return "Посчитается после сохранения"
         return render_cost_tree(safe_tree(model_tree, obj))
-
-    def save_related(self, request, form, formsets, change):
-        """Переименование слота не должно стирать цвета вариантов (см. services)."""
-        model = form.instance
-        before = services.snapshot_slots(model) if change else {}
-        renames: dict[str, str] = {}
-        for formset in formsets:
-            if formset.model is not ModelPart:
-                continue
-            for line_form in formset.forms:
-                if not getattr(line_form, "cleaned_data", None) or line_form.cleaned_data.get(
-                    "DELETE"
-                ):
-                    continue
-                old = clean_slot(line_form.initial.get("slot") or "")
-                new = clean_slot(line_form.cleaned_data.get("slot") or "")
-                if old and new and old != new:
-                    renames[old] = new
-        super().save_related(request, form, formsets, change)
-        if renames:
-            still_present = set(model.slot_names())
-            renames = {o: n for o, n in renames.items() if o not in still_present}
-            services.restore_renamed_slots(model, before, renames)
 
     # --- Генераторы ---
 
@@ -675,7 +788,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
 
 
 class VariantSlotForm(ActiveChoicesForm):
-    """Материал слота — только из категории детали по умолчанию."""
+    """Материал группы — только из категории детали по умолчанию."""
 
     class Meta:
         model = VariantSlot
@@ -699,7 +812,7 @@ class VariantSlotInline(LineInline):
     can_delete = False
     fields = ("slot", "material", "swatch")
     readonly_fields = ("slot", "swatch")
-    verbose_name_plural = "Материалы по слотам"
+    verbose_name_plural = "Цвета по группам"
 
     def has_add_permission(self, request, obj=None):
         return False
@@ -773,7 +886,7 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
 
     def response_add(self, request, obj, post_url_continue=None):
         if obj.model.slot_names():
-            messages.info(request, "Выберите цвета по слотам на вкладке «Цвета по слотам».")
+            messages.info(request, "Выберите цвета на вкладке «Цвета по группам».")
             if IS_POPUP_VAR not in request.POST and "_addanother" not in request.POST:
                 return hx_redirect(request, _admin_url(obj))
         return super().response_add(request, obj, post_url_continue)
@@ -816,3 +929,30 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
         if not obj.pk:
             return "Посчитается после сохранения"
         return render_cost_tree(safe_tree(variant_tree, obj))
+
+
+# --- Расцветки деталей -------------------------------------------------------------
+
+
+@admin.register(PartColoring)
+class PartColoringAdmin(PageHelpMixin, ModelAdmin):
+    """Ведёт система: нужен для выбора детали с её материалами в документах склада."""
+
+    list_display = ("part", "label")
+    list_filter = ("part",)
+    search_fields = ("part__name", "part__code", "label")
+    fields = ("part", "label")
+    readonly_fields = ("part", "label")
+    list_filter_submit = False
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related("part")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

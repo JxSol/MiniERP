@@ -31,13 +31,19 @@ from catalog.models import (
     MaterialOffer,
     Supplier,
 )
-from core.models import CodeField, UniqueNameModel, next_code, positive_decimal_field
-from production.models import Coloring, Part, Variant
+from core.models import (
+    CodeField,
+    UniqueNameModel,
+    money_field,
+    next_code,
+    positive_decimal_field,
+)
+from production.models import Coloring, Part, PartColoring, PartMaterial, Variant
 from sales.models import Product
 
 ZERO = Decimal(0)
 
-# Ключ позиции на складе: (вид, id записи, id материала для детали)
+# Ключ позиции на складе: (вид, id записи, id расцветки для детали)
 ItemKey = tuple[str, int, int | None]
 
 
@@ -92,7 +98,10 @@ class ItemKind(models.TextChoices):
 
 
 class StockItemMixin(models.Model):
-    """Ровно одна из ссылок заполнена. У детали дополнительно указан материал (цвет)."""
+    """
+    Ровно одна из ссылок заполнена. Деталь на складе — это деталь с расцветкой
+    (из каких материалов сделана); поле «деталь» заполняется из расцветки.
+    """
 
     material = models.ForeignKey(
         Material,
@@ -110,14 +119,14 @@ class StockItemMixin(models.Model):
         on_delete=models.PROTECT,
         related_name="+",
     )
-    part_material = models.ForeignKey(
-        Material,
-        verbose_name="Материал детали",
+    part_coloring = models.ForeignKey(
+        PartColoring,
+        verbose_name="Деталь с расцветкой",
         null=True,
         blank=True,
         on_delete=models.PROTECT,
         related_name="+",
-        help_text="Из чего напечатана деталь (цвет).",
+        help_text="Из чего сделана деталь: остатки деталей ведутся по расцветке.",
     )
     variant = models.ForeignKey(
         Variant,
@@ -154,7 +163,7 @@ class StockItemMixin(models.Model):
         if self.material_id:
             return (ItemKind.MATERIAL.value, self.material_id, None)
         if self.part_id:
-            return (ItemKind.PART.value, self.part_id, self.part_material_id)
+            return (ItemKind.PART.value, self.part_id, self.part_coloring_id)
         if self.variant_id:
             return (ItemKind.VARIANT.value, self.variant_id, None)
         return (ItemKind.PRODUCT.value, self.product_id, None)
@@ -164,9 +173,7 @@ class StockItemMixin(models.Model):
         if self.material_id:
             return str(self.material)
         if self.part_id:
-            return (
-                f"{self.part} ({self.part_material})" if self.part_material_id else str(self.part)
-            )
+            return str(self.part_coloring) if self.part_coloring_id else str(self.part)
         if self.variant_id:
             return str(self.variant)
         return f"{self.product.sku} {self.product.name}" if self.product_id else "—"
@@ -184,41 +191,43 @@ class StockItemMixin(models.Model):
         return fmt_quantity(quantity, "шт")
 
     def clean_item(self):
+        if self.part_coloring_id:
+            self.part = self.part_coloring.part
         filled = [f for f in ("material", "part", "variant", "product") if getattr(self, f"{f}_id")]
         if len(filled) != 1:
             raise ValidationError(
                 "Укажите ровно одну позицию: материал, деталь, изделие или товар."
             )
-        if self.part_id and not self.part_material_id:
-            raise ValidationError({"part_material": "Для детали укажите материал (цвет)."})
-        if self.part_id and self.part_material_id:
-            if self.part_material.category_id != self.part.material.category_id:
-                raise ValidationError(
-                    {
-                        "part_material": f"Деталь «{self.part}» делается из «{self.part.material.category}»."
-                    }
-                )
-        if not self.part_id and self.part_material_id:
-            raise ValidationError({"part_material": "Материал детали указывается только у детали."})
+        if self.part_id and not self.part_coloring_id:
+            raise ValidationError(
+                {"part_coloring": "Для детали укажите расцветку (из чего она сделана)."}
+            )
+
+    def save(self, *args, **kwargs):
+        if self.part_coloring_id and not self.part_id:
+            self.part_id = self.part_coloring.part_id
+        super().save(*args, **kwargs)
 
     @staticmethod
     def key_filter(key: ItemKey) -> dict:
-        kind, pk, material_id = key
+        kind, pk, coloring_id = key
         if kind == ItemKind.MATERIAL:
             return {"material_id": pk}
         if kind == ItemKind.PART:
-            return {"part_id": pk, "part_material_id": material_id}
+            return {"part_id": pk, "part_coloring_id": coloring_id}
         if kind == ItemKind.VARIANT:
             return {"variant_id": pk}
         return {"product_id": pk}
 
     @staticmethod
     def key_label(key: ItemKey) -> str:
-        kind, pk, material_id = key
+        kind, pk, coloring_id = key
         if kind == ItemKind.MATERIAL:
             return str(Material.objects.get(pk=pk))
         if kind == ItemKind.PART:
-            return f"{Part.objects.get(pk=pk)} ({Material.objects.get(pk=material_id)})"
+            if coloring_id:
+                return str(PartColoring.objects.select_related("part").get(pk=coloring_id))
+            return str(Part.objects.get(pk=pk))
         if kind == ItemKind.VARIANT:
             return str(Variant.objects.get(pk=pk))
         return str(Product.objects.get(pk=pk))
@@ -256,7 +265,7 @@ class StockMove(StockItemMixin):
         indexes = [
             models.Index(fields=["content_type", "object_id"]),
             models.Index(fields=["warehouse", "material"]),
-            models.Index(fields=["warehouse", "part", "part_material"]),
+            models.Index(fields=["warehouse", "part", "part_coloring"]),
             models.Index(fields=["warehouse", "variant"]),
             models.Index(fields=["warehouse", "product"]),
         ]
@@ -280,7 +289,7 @@ class StockBalance(StockItemMixin):
         constraints = [
             _item_constraint("stock_balance_single_item"),
             models.UniqueConstraint(
-                fields=["warehouse", "material", "part", "part_material", "variant", "product"],
+                fields=["warehouse", "material", "part", "part_coloring", "variant", "product"],
                 name="stock_balance_uniq",
                 nulls_distinct=False,
             ),
@@ -320,7 +329,7 @@ def recalc_balances(keys: set[tuple[int, ItemKey]]) -> None:
     for warehouse_id, key in keys:
         total = balance_of(warehouse_id, key)
         lookup = {"warehouse_id": warehouse_id, **StockItemMixin.key_filter(key)}
-        for field in ("material_id", "part_id", "part_material_id", "variant_id", "product_id"):
+        for field in ("material_id", "part_id", "part_coloring_id", "variant_id", "product_id"):
             lookup.setdefault(field, None)
         if total == ZERO:
             StockBalance.objects.filter(**lookup).delete()
@@ -733,19 +742,17 @@ class ReceiptLine(models.Model):
 
 
 class ProductionRun(StockDocument):
-    """Выпуск деталей: напечатали или вырезали партию одной детали."""
+    """
+    Выпуск деталей: сняли со стола или с лазера партию одной детали. Это факт — станок,
+    сколько вышло, фактическое время и расход по каждому материалу (пусто — по норме).
+    Норма для цены живёт в карточке детали («типовая партия»); apply_as_norm() переносит
+    факт этого выпуска в норму.
+    """
 
     number_prefix = "MAKE"
 
     part = models.ForeignKey(
         Part, verbose_name="Деталь", on_delete=models.PROTECT, related_name="runs"
-    )
-    material = models.ForeignKey(
-        Material,
-        verbose_name="Материал",
-        on_delete=models.PROTECT,
-        related_name="runs",
-        help_text="По умолчанию — материал детали.",
     )
     equipment = models.ForeignKey(
         Equipment,
@@ -758,73 +765,241 @@ class ProductionRun(StockDocument):
     scrap_qty = models.PositiveIntegerField(
         "Брак, шт", default=0, help_text="Материал на брак тоже списывается."
     )
+    actual_minutes = models.DecimalField(
+        "Время фактически",
+        max_digits=10,
+        decimal_places=4,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0.01"))],
+        help_text="Пусто — по норме детали.",
+    )
+    cost_total = money_field("Себестоимость партии, ₸", null=True, blank=True, editable=False)
+    cost_per_piece = money_field("Себестоимость 1 шт, ₸", null=True, blank=True, editable=False)
+    norm_cost_per_piece = money_field("По норме, ₸", null=True, blank=True, editable=False)
     history = HistoricalRecords()
 
     class Meta(StockDocument.Meta):
         verbose_name = "Выпуск деталей"
         verbose_name_plural = "Выпуск деталей"
 
+    def _default_equipment(self):
+        if self.part_id and not self.equipment_id:
+            self.equipment = self.part.equipment
+
     def clean_fields(self, exclude=None):
-        # Умолчания из детали подставляются до проверки обязательных полей
-        if self.part_id:
-            if not self.material_id:
-                self.material = self.part.material
-            if not self.equipment_id:
-                self.equipment = self.part.equipment
+        self._default_equipment()  # до проверки обязательных полей
         super().clean_fields(exclude)
+
+    def save(self, *args, **kwargs):
+        self._default_equipment()
+        super().save(*args, **kwargs)
 
     def clean(self):
         super().clean()
-        if self.part_id and self.material_id:
-            if self.material.category_id != self.part.material.category_id:
-                raise ValidationError(
-                    {
-                        "material": f"Деталь «{self.part}» делается из «{self.part.material.category}»."
-                    }
-                )
-            if self.material.unit != self.part.material.unit:
-                raise ValidationError({"material": "У материала другая единица расхода."})
         if (self.good_qty or 0) + (self.scrap_qty or 0) < 1:
             raise ValidationError({"good_qty": "Укажите, сколько получилось (годных или брака)."})
-        if self.warehouse_id and self.part_id and self.material_id:
-            shortages = self.check_shortages(self.build_moves())
-            if shortages:
-                raise ValidationError({"material": "Не хватает: " + "; ".join(shortages)})
+        # нехватку материала до сохранения проверяет форма выпуска (строки материалов),
+        # а при проведении — post()
+
+    # --- материалы ---
 
     @property
-    def material_used(self) -> Decimal:
-        used = self.part.material_per_piece * (self.good_qty + self.scrap_qty)
-        return used.quantize(Decimal("0.0001"))  # точность движений склада
+    def pieces(self) -> int:
+        return (self.good_qty or 0) + (self.scrap_qty or 0)
+
+    def planned_qty(self, position: PartMaterial) -> Decimal:
+        """Расход по норме детали на все штуки этого выпуска, включая брак."""
+        return (position.per_piece * self.pieces).quantize(Decimal("0.0001"))
+
+    @property
+    def planned_minutes(self) -> Decimal:
+        return self.part.batch_minutes / self.part.batch_size * self.pieces
+
+    @property
+    def minutes(self) -> Decimal:
+        """Фактическое время, а если его не записали — по норме."""
+        return self.actual_minutes if self.actual_minutes is not None else self.planned_minutes
+
+    def material_rows(self) -> list[ProductionRunMaterial]:
+        return list(
+            self.materials.select_related("position", "material__color").order_by(
+                "position__order", "position_id"
+            )
+        )
+
+    def ensure_materials(self) -> None:
+        """Строка на каждую позицию детали; недостающие — с материалом по умолчанию."""
+        existing = {row.position_id for row in self.materials.all()}
+        for position in self.part.positions:
+            if position.pk not in existing:
+                ProductionRunMaterial.objects.create(
+                    run=self, position=position, material=position.material
+                )
+
+    def coloring(self) -> PartColoring:
+        return PartColoring.get_for(
+            self.part, {row.position_id: row.material for row in self.material_rows()}
+        )
 
     def build_moves(self):
+        self.ensure_materials()
+        used: dict[int, Decimal] = defaultdict(lambda: ZERO)
+        for row in self.material_rows():
+            used[row.material_id] += row.used
         moves = [
-            (
-                self.warehouse_id,
-                (ItemKind.MATERIAL.value, self.material_id, None),
-                -self.material_used,
-            )
+            (self.warehouse_id, (ItemKind.MATERIAL.value, material_id, None), -qty)
+            for material_id, qty in used.items()
         ]
         if self.good_qty:
             moves.append(
                 (
                     self.warehouse_id,
-                    (ItemKind.PART.value, self.part_id, self.material_id),
+                    (ItemKind.PART.value, self.part_id, self.coloring().pk),
                     Decimal(self.good_qty),
                 )
             )
         return moves
 
+    def materials_summary(self) -> str:
+        return "; ".join(row.summary() for row in self.material_rows())
+
+    # --- факт против нормы ---
+
+    def compute_cost(self) -> tuple[Decimal, Decimal | None]:
+        """
+        Себестоимость партии по факту: материалы по фактическому расходу, станок по
+        фактическому времени, обработка на годные штуки. Вторым числом — на одну годную.
+        """
+        from costing.engine import labor_cost
+        from costing.loader import Catalog
+
+        catalog = Catalog()
+        total = ZERO
+        for row in self.material_rows():
+            use = catalog.material_use(row.material_id, row.used)
+            total += use.quantity * use.unit_price
+        total += self.minutes / 60 * catalog.machine(self.equipment_id).hourly
+        operations = sum((labor_cost(catalog.labor(op)) for op in self.part.operations.all()), ZERO)
+        total += operations * self.good_qty
+        per_piece = total / self.good_qty if self.good_qty else None
+        return total, per_piece
+
+    def after_post(self):
+        from costing.loader import CostError
+
+        try:
+            total, per_piece = self.compute_cost()
+        except CostError:
+            total, per_piece = None, None
+        money = Decimal("0.01")
+        self.cost_total = total.quantize(money) if total is not None else None
+        self.cost_per_piece = per_piece.quantize(money) if per_piece is not None else None
+        norm = self.part.cost_cached
+        self.norm_cost_per_piece = norm.quantize(money) if norm is not None else None
+        type(self).objects.filter(pk=self.pk).update(
+            cost_total=self.cost_total,
+            cost_per_piece=self.cost_per_piece,
+            norm_cost_per_piece=self.norm_cost_per_piece,
+        )
+
+    @transaction.atomic
+    def apply_as_norm(self) -> None:
+        """Типовая партия детали = этот выпуск: штук, время, расход по каждой позиции."""
+        part = self.part
+        used = [(row.position, row.used) for row in self.material_rows()]  # до смены партии
+        minutes = self.minutes.quantize(Decimal("0.0001"))
+        part.batch_size = self.pieces
+        part.batch_minutes = minutes
+        part.save()
+        for position, quantity in used:
+            position.batch_qty = quantity
+            position.save()
+
+
+class ProductionRunMaterial(EnteredUnitMixin):
+    """Из чего печатали каждую позицию детали и сколько ушло на самом деле (пусто — по норме)."""
+
+    run = models.ForeignKey(ProductionRun, on_delete=models.CASCADE, related_name="materials")
+    position = models.ForeignKey(
+        PartMaterial, verbose_name="Позиция", on_delete=models.PROTECT, related_name="run_materials"
+    )
+    material = models.ForeignKey(
+        Material,
+        verbose_name="Материал",
+        on_delete=models.PROTECT,
+        related_name="run_materials",
+        limit_choices_to={"category__kind__in": PRODUCTION_KINDS},
+    )
+    quantity = positive_decimal_field(
+        "Расход фактически", null=True, blank=True, help_text="Пусто — по норме детали."
+    )
+
+    class Meta:
+        verbose_name = "Материал выпуска"
+        verbose_name_plural = "Материалы"
+        ordering = ["position__order", "position_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["run", "position"], name="stock_productionrunmaterial_uniq"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.position.label}: {self.material}"
+
+    @property
+    def planned(self) -> Decimal:
+        return self.run.planned_qty(self.position)
+
+    @property
+    def used(self) -> Decimal:
+        return self.quantity if self.quantity is not None else self.planned
+
+    def clean(self):
+        super().clean()
+        if self.position_id and self.material_id:
+            default = self.position.material
+            if self.material.category_id != default.category_id:
+                raise ValidationError(
+                    {
+                        "material": f"Позиция «{self.position.label}» делается из "
+                        f"«{default.category}»."
+                    }
+                )
+            if self.material.unit != default.unit:
+                raise ValidationError({"material": "У материала другая единица расхода."})
+
+    def summary(self) -> str:
+        """«PLA Basic, белый: 750 г (по норме)» или «…: 780 г (норма 750 г)»."""
+        planned = self.material.format_qty(self.planned)
+        if self.quantity is None:
+            return f"{self.material}: {planned} (по норме)"
+        return f"{self.material}: {self.material.format_entered(self.quantity, self.entered_unit)} (норма {planned})"
+
 
 # --- Сборка ------------------------------------------------------------------------
 
 
-def _line_materials(material: Material) -> list[Material]:
-    """Все цвета той же линейки и категории — для «Ассорти»."""
-    return list(
-        Material.objects.filter(
-            category_id=material.category_id, name_key=material.name_key, is_active=True
-        )
-    )
+def _random_colorings(part: Part, wanted: dict[int, Material]) -> list[PartColoring]:
+    """Расцветки детали для «Ассорти»: позиции с группой — любой цвет той же линейки."""
+    result = []
+    for coloring in part.colorings.prefetch_related("items__material"):
+        actual = coloring.materials()
+        ok = True
+        for position in part.positions:
+            have, want = actual.get(position.pk), wanted[position.pk]
+            if have is None:
+                ok = False
+            elif position.slot:
+                ok = have.category_id == want.category_id and have.name_key == want.name_key
+            else:
+                ok = have.pk == want.pk
+            if not ok:
+                break
+        if ok:
+            result.append(coloring)
+    return result
 
 
 class Assembly(StockDocument):
@@ -854,36 +1029,38 @@ class Assembly(StockDocument):
     def _consume_parts(self) -> list[tuple[int, ItemKey, Decimal]]:
         model = self.variant.model
         slot_materials = {s.slot: s.material for s in self.variant.slots.select_related("material")}
+        random = self.variant.coloring == Coloring.RANDOM
         moves = []
-        for line in model.model_parts.select_related("part__material"):
+        lines = model.model_parts.select_related("part").prefetch_related(
+            "part__materials__material"
+        )
+        for line in lines:
+            part = line.part
             need = Decimal(line.quantity * self.quantity)
-            material = slot_materials.get(line.slot) if line.slot else None
-            material = material or line.part.material
-            if self.variant.coloring == Coloring.RANDOM and line.slot:
-                # Ассорти: любой цвет линейки, сначала тот, которого больше
-                candidates = _line_materials(material)
+            wanted = {}
+            for position in part.positions:
+                material = slot_materials.get(position.slot) if position.slot else None
+                wanted[position.pk] = material or position.material
+            if random and part.slot_names():
+                # Ассорти: любая расцветка линейки, сначала та, которой больше
+                candidates = _random_colorings(part, wanted)
                 stock = {
-                    m.pk: balance_of(
-                        self.warehouse_id, (ItemKind.PART.value, line.part_id, m.pk), self
-                    )
-                    for m in candidates
+                    c.pk: balance_of(self.warehouse_id, (ItemKind.PART.value, part.pk, c.pk), self)
+                    for c in candidates
                 }
-                for m in sorted(candidates, key=lambda m: -stock[m.pk]):
+                for coloring in sorted(candidates, key=lambda c: -stock[c.pk]):
                     if need <= 0:
                         break
-                    take = min(need, max(stock[m.pk], ZERO))
+                    take = min(need, max(stock[coloring.pk], ZERO))
                     if take > 0:
                         moves.append(
-                            (self.warehouse_id, (ItemKind.PART.value, line.part_id, m.pk), -take)
+                            (self.warehouse_id, (ItemKind.PART.value, part.pk, coloring.pk), -take)
                         )
                         need -= take
-                if need > 0:  # не хватило — спишем с основного, проверка на минус покажет
-                    moves.append(
-                        (self.warehouse_id, (ItemKind.PART.value, line.part_id, material.pk), -need)
-                    )
-            else:
+            if need > 0:  # задуманная расцветка; для ассорти — не хватило, проверка покажет
+                coloring = PartColoring.get_for(part, wanted)
                 moves.append(
-                    (self.warehouse_id, (ItemKind.PART.value, line.part_id, material.pk), -need)
+                    (self.warehouse_id, (ItemKind.PART.value, part.pk, coloring.pk), -need)
                 )
         return moves
 

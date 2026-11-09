@@ -107,7 +107,9 @@ class PartSpec:
     """
 
     name: str
-    material: MaterialUse  # quantity — расход на партию
+    materials: tuple[
+        MaterialUse, ...
+    ]  # quantity — расход на партию; у композитной детали несколько
     machine: MachineRates
     batch_minutes: Decimal
     batch_size: int
@@ -220,14 +222,18 @@ def part_cost(spec: PartSpec) -> CostNode:
     """Себестоимость одной детали (ТЗ, п. 4.1)."""
     batch_size = Decimal(spec.batch_size)
 
-    material = _material_node(
-        MaterialUse(
-            name=spec.material.name,
-            quantity=spec.material.quantity / batch_size,
-            unit=spec.material.unit,
-            unit_price=spec.material.unit_price,
+    materials = [
+        _material_node(
+            MaterialUse(
+                name=use.name,
+                quantity=use.quantity / batch_size,
+                unit=use.unit,
+                unit_price=use.unit_price,
+            )
         )
-    )
+        for use in spec.materials
+    ]
+    material_amount = sum((m.amount for m in materials), ZERO)
 
     hours = spec.batch_minutes / MINUTES_IN_HOUR / batch_size
     machine = CostNode(
@@ -247,8 +253,8 @@ def part_cost(spec: PartSpec) -> CostNode:
         ],
     )
 
-    children = [material, machine]
-    scrap = scrap_markup(material.amount + machine.amount, spec.scrap_percent)
+    children = [*materials, machine]
+    scrap = scrap_markup(material_amount + machine.amount, spec.scrap_percent)
     if scrap:
         children.append(
             CostNode(kind="scrap", name=f"Брак {_pct(spec.scrap_percent)} %", amount=scrap)

@@ -10,7 +10,7 @@ from catalog.models import Material
 from core.demo import load_demo
 from core.roles import SELLER, TECHNOLOGIST
 from costing.services import recalculate_all
-from production.models import Part
+from production.models import Part, PartColoring
 from stock.models import (
     DocumentStatus,
     ItemKind,
@@ -97,39 +97,35 @@ def test_receipt_and_run_posted_from_admin_forms(client, demo):
     assert balance_of(wh.pk, (ItemKind.MATERIAL, white.pk, None)) == D(2000)
 
     shade = Part.objects.get(name="Плафон Луна")
+    run_form = {
+        "date": "2026-10-15",
+        "warehouse": wh.pk,
+        "part": shade.pk,
+        "equipment": "",
+        "actual_minutes_0": "",
+        "actual_minutes_1": "",
+        "actual_minutes_2": "",
+        "actual_minutes_3": "",
+        "notes": "",
+        "materials-TOTAL_FORMS": "0",
+        "materials-INITIAL_FORMS": "0",
+    }
     response = client.post(
-        reverse("admin:stock_productionrun_add"),
-        {
-            "date": "2026-10-15",
-            "warehouse": wh.pk,
-            "part": shade.pk,
-            "material": "",
-            "equipment": "",
-            "good_qty": "3",
-            "scrap_qty": "1",
-            "notes": "",
-        },
+        reverse("admin:stock_productionrun_add"), {**run_form, "good_qty": "3", "scrap_qty": "1"}
     )
     assert response.status_code == 302, response.content.decode()[:800]
     run = ProductionRun.objects.get(warehouse=wh)
-    assert run.material == white and run.equipment == shade.equipment
+    assert run.equipment == shade.equipment
+    assert [row.material for row in run.material_rows()] == [white]  # строка по умолчанию
     assert run.status == DocumentStatus.POSTED
+    assert run.cost_per_piece is not None and run.norm_cost_per_piece is not None
     assert balance_of(wh.pk, (ItemKind.MATERIAL, white.pk, None)) == D(1000)
-    assert balance_of(wh.pk, (ItemKind.PART, shade.pk, white.pk)) == D(3)
+    coloring = PartColoring.get_for(shade, {})
+    assert balance_of(wh.pk, (ItemKind.PART, shade.pk, coloring.pk)) == D(3)
 
     # нехватка — форма не сохраняется, остатки не меняются
     response = client.post(
-        reverse("admin:stock_productionrun_add"),
-        {
-            "date": "2026-10-15",
-            "warehouse": wh.pk,
-            "part": shade.pk,
-            "material": "",
-            "equipment": "",
-            "good_qty": "10",
-            "scrap_qty": "0",
-            "notes": "",
-        },
+        reverse("admin:stock_productionrun_add"), {**run_form, "good_qty": "10", "scrap_qty": "0"}
     )
     assert response.status_code == 200 and "Не хватает" in response.content.decode()
     assert ProductionRun.objects.filter(warehouse=wh).count() == 1

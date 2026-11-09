@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError
 from catalog.models import Equipment, Material
 from core.demo import load_demo, product_of, variant_of
 from costing.services import recalculate_all
-from production.models import Part, ProductModel
+from production.models import Part, PartColoring, ProductModel
 from stock.models import (
     Assembly,
     DocumentStatus,
@@ -17,6 +17,7 @@ from stock.models import (
     ItemKind,
     Packing,
     ProductionRun,
+    ProductionRunMaterial,
     ReasonDirection,
     Receipt,
     ReceiptLine,
@@ -58,13 +59,18 @@ def mat(name, color=None):
     )
 
 
+def coloring(part, material):
+    """Расцветка «одна позиция из этого материала» — как у деталей демо."""
+    return PartColoring.get_for(part, {part.main_position.pk: material})
+
+
 def count(wh, counted: dict):
     """Инвентаризация: {позиция: количество}. Позиция — материал, (деталь, материал), вариант или товар."""
     inv = Inventory.objects.create(warehouse=wh, notes="начальные остатки")
     for item, qty in counted.items():
         if isinstance(item, tuple):
             InventoryLine.objects.create(
-                inventory=inv, part=item[0], part_material=item[1], counted_qty=D(qty)
+                inventory=inv, part_coloring=coloring(*item), counted_qty=D(qty)
             )
         elif isinstance(item, Material):
             InventoryLine.objects.create(inventory=inv, material=item, counted_qty=D(qty))
@@ -81,7 +87,7 @@ def material_balance(wh, material):
 
 
 def part_balance(wh, part, material):
-    return balance_of(wh.pk, (ItemKind.PART, part.pk, material.pk))
+    return balance_of(wh.pk, (ItemKind.PART, part.pk, coloring(part, material).pk))
 
 
 # --- Приход ---
@@ -133,13 +139,21 @@ def test_production_run_consumes_material_incl_scrap(demo):
     shade = Part.objects.get(name="Плафон Луна")
     count(wh, {white: 1000})
     run = ProductionRun(
-        warehouse=wh, part=shade, material=white, equipment=shade.equipment, good_qty=2, scrap_qty=1
+        warehouse=wh, part=shade, equipment=shade.equipment, good_qty=2, scrap_qty=1
     )
     run.full_clean()
     run.save()
-    run.post()
+    run.post()  # строки материалов — по позициям детали, материал по умолчанию
     assert material_balance(wh, white) == D(250)  # 1000 − 250 × 3
     assert part_balance(wh, shade, white) == D(2)
+    row = run.materials.get()
+    assert row.material == white and row.quantity is None and row.used == D(750)
+    assert run.materials_summary() == f"PLA Basic, белый: 750{NBSP}г (по норме)"
+    run.refresh_from_db()
+    # факт = норма, значит себестоимость штуки совпадает с нормой детали (с поправкой на брак:
+    # в норме брак 5 %, а по факту 1 из 3)
+    assert run.cost_total is not None
+    assert abs(run.cost_per_piece - run.cost_total / 2) <= D("0.01")
     assert fact_scrap_percent(part=shade) == D(100) / 3  # в демо у плафона та же пропорция 2:1
     assert fact_scrap_percent(equipment=shade.equipment) is not None
 
@@ -149,16 +163,13 @@ def test_production_run_rejects_shortage(demo):
     white = mat("PLA Basic", "Белый")
     shade = Part.objects.get(name="Плафон Луна")
     count(wh, {white: 300})
-    run = ProductionRun(
-        warehouse=wh, part=shade, material=white, equipment=shade.equipment, good_qty=2
+    run = ProductionRun.objects.create(
+        warehouse=wh, part=shade, equipment=shade.equipment, good_qty=2
     )
-    with pytest.raises(ValidationError) as excinfo:
-        run.full_clean()
-    # repr экранирует неразрывный пробел, поэтому сверяем текст, а не match=
-    assert f"есть 300{NBSP}г, нужно 500{NBSP}г" in " ".join(excinfo.value.message_dict["material"])
-    run.save()
-    with pytest.raises(Shortage):
+    with pytest.raises(Shortage) as excinfo:
         run.post()
+    # repr экранирует неразрывный пробел, поэтому сверяем текст, а не match=
+    assert f"есть 300{NBSP}г, нужно 500{NBSP}г" in " ".join(excinfo.value.messages)
     assert run.status == DocumentStatus.DRAFT
     assert not run._moves_qs().exists()
 
@@ -169,9 +180,10 @@ def test_production_run_defaults_from_part(demo):
     count(wh, {shade.material: 1000})
     run = ProductionRun(warehouse=wh, part=shade, good_qty=1)
     run.full_clean()
-    assert run.material == shade.material and run.equipment == shade.equipment
+    assert run.equipment == shade.equipment
+    run.save()
     plywood = mat("Фанера 4 мм")
-    bad = ProductionRun(warehouse=wh, part=shade, material=plywood, good_qty=1)
+    bad = ProductionRunMaterial(run=run, position=shade.main_position, material=plywood)
     with pytest.raises(ValidationError, match="делается из"):
         bad.full_clean()
 
@@ -264,7 +276,7 @@ def test_cancel_restores_stock_and_refuses_when_it_would_go_negative(demo):
     shade = Part.objects.get(name="Плафон Луна")
     receipt = count(wh, {white: 500})
     run = ProductionRun.objects.create(
-        warehouse=wh, part=shade, material=white, equipment=shade.equipment, good_qty=1
+        warehouse=wh, part=shade, equipment=shade.equipment, good_qty=1
     )
     run.post()
     with pytest.raises(Shortage):  # без прихода выпуск ушёл бы в минус
@@ -292,7 +304,7 @@ def test_item_validation(demo):
     with pytest.raises(ValidationError, match="ровно одну позицию"):
         InventoryLine(inventory=inv, counted_qty=D(1)).full_clean()
     shade = Part.objects.get(name="Плафон Луна")
-    with pytest.raises(ValidationError, match="укажите материал"):
+    with pytest.raises(ValidationError, match="укажите расцветку"):
         InventoryLine(inventory=inv, part=shade, counted_qty=D(1)).full_clean()
     assert Equipment.objects.count() == 2
 
@@ -302,12 +314,16 @@ def test_receiving_and_writeoff(demo):
     wh = demo["wh"]
     part = Part.objects.get(name="Плафон Луна")
     white = mat("PLA Basic", "Белый")
-    key = (ItemKind.PART.value, part.pk, white.pk)
+    white_shade = coloring(part, white)
+    key = (ItemKind.PART.value, part.pk, white_shade.pk)
 
     receiving = Receiving.objects.create(
         warehouse=wh, reason=StockReason.objects.get(name="Начальные остатки")
     )
-    ReceivingLine.objects.create(document=receiving, part=part, part_material=white, quantity=D(5))
+    line = ReceivingLine.objects.create(
+        document=receiving, part_coloring=white_shade, quantity=D(5)
+    )
+    assert line.part == part and line.item_label == "Плафон Луна (PLA Basic, белый)"
     receiving.post()
     assert receiving.status == DocumentStatus.POSTED
     assert receiving.number.startswith("RCV-")
@@ -316,13 +332,13 @@ def test_receiving_and_writeoff(demo):
     writeoff = WriteOff.objects.create(
         warehouse=wh, reason=StockReason.objects.get(name="Образцы и подарки")
     )
-    WriteOffLine.objects.create(document=writeoff, part=part, part_material=white, quantity=D(3))
+    WriteOffLine.objects.create(document=writeoff, part_coloring=white_shade, quantity=D(3))
     writeoff.post()
     assert writeoff.number.startswith("WRO-")
     assert balance_of(wh.pk, key) == D(2)
 
     too_much = WriteOff.objects.create(warehouse=wh, reason=StockReason.objects.get(name="Прочее"))
-    WriteOffLine.objects.create(document=too_much, part=part, part_material=white, quantity=D(10))
+    WriteOffLine.objects.create(document=too_much, part_coloring=white_shade, quantity=D(10))
     with pytest.raises(Shortage):
         too_much.post()
     assert balance_of(wh.pk, key) == D(2)

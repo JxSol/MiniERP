@@ -10,7 +10,7 @@ from django.urls import reverse
 from catalog.models import Material, MaterialCategory, MaterialForm, MaterialOffer, QtyUnit, Unit
 from core.demo import load_demo
 from costing.services import recalculate_all
-from production.models import Part
+from production.models import Part, PartMaterial
 from sales.admin import ProductPackagingForm
 from sales.models import Product
 from stock.admin import ITEM_FIELDS, ItemLineForm
@@ -103,9 +103,9 @@ def test_zero_price_is_rejected(demo):
     offer = MaterialOffer(material=bubble, pack_size=D(100), pack_price=D(0))
     with pytest.raises(ValidationError):
         offer.full_clean()
-    luna_part = Part(name="Пылинка", batch_material_qty=D("0.0001"), batch_size=10)
+    position = PartMaterial(part=Part(name="Пылинка", batch_size=10), batch_qty=D("0.0001"))
     with pytest.raises(ValidationError, match="меньше 0,0001"):
-        luna_part.clean()
+        position.clean()
     with pytest.raises(ValidationError, match="получается 0"):
         bubble.to_base(D("0.00001"), QtyUnit.SQ_METER)
 

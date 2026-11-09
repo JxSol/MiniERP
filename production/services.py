@@ -1,6 +1,8 @@
-"""Служебные операции производства: синхронизация слотов вариантов."""
+"""Служебные операции производства: синхронизация цветовых групп (слотов) и расцветок деталей."""
 
-from .models import ProductModel, Variant, VariantSlot
+from catalog.models import Material
+
+from .models import Coloring, PartColoring, ProductModel, Variant, VariantSlot
 
 
 def sync_variant_slots(variant: Variant) -> None:
@@ -21,6 +23,31 @@ def sync_variant_slots(variant: Variant) -> None:
     for slot, line in existing.items():
         if slot not in defaults:
             line.delete()
+    ensure_variant_colorings(variant)
+
+
+def variant_part_materials(variant: Variant) -> dict[int, dict[int, Material]]:
+    """{id детали: {id позиции: материал}} — из чего печатать каждую деталь этого варианта."""
+    slot_materials = {s.slot: s.material for s in variant.slots.select_related("material")}
+    result: dict[int, dict[int, Material]] = {}
+    for line in variant.model.model_parts.select_related("part").prefetch_related(
+        "part__materials__material"
+    ):
+        mapping = {}
+        for position in line.part.positions:
+            material = slot_materials.get(position.slot) if position.slot else None
+            mapping[position.pk] = material or position.material
+        result[line.part_id] = mapping
+    return result
+
+
+def ensure_variant_colorings(variant: Variant) -> None:
+    """Расцветки деталей, которые нужны этому варианту, существуют (для сборки и инвентаризации)."""
+    if variant.coloring == Coloring.RANDOM:
+        return
+    parts = {line.part_id: line.part for line in variant.model.model_parts.select_related("part")}
+    for part_id, mapping in variant_part_materials(variant).items():
+        PartColoring.get_for(parts[part_id], mapping)
 
 
 def sync_model_slots(model: ProductModel) -> None:

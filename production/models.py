@@ -2,6 +2,8 @@
 Производство: детали, модели и их варианты (ТЗ, разделы 3 и 6.5–6.7).
 """
 
+from __future__ import annotations
+
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
@@ -135,7 +137,13 @@ class ProductCategory(UniqueNameModel):
 
 
 class Part(UniqueNameModel):
-    """То, что изготавливается на одном станке за один проход (ТЗ п. 6.5)."""
+    """
+    То, что изготавливается на одном станке за один проход (ТЗ п. 6.5): чертёж без цвета.
+    Из чего деталь делается — позиции материалов (PartMaterial): обычно одна, у композитной
+    детали (печать несколькими пластиками через АМС) несколько. Расход и время указываются
+    на типовую партию — так, как деталь обычно печатают: стол или лист из N штук.
+    Конкретные материалы (цвета) появляются у варианта и при выпуске (PartColoring).
+    """
 
     code = CodeField("Код", unique=True)
     equipment = models.ForeignKey(
@@ -145,34 +153,17 @@ class Part(UniqueNameModel):
         related_name="parts",
         help_text="Поменять технологию у готовой детали нельзя — это уже другая деталь: нажмите «Копировать деталь».",
     )
-    material = models.ForeignKey(
-        Material,
-        verbose_name="Материал по умолчанию",
-        on_delete=models.PROTECT,
-        related_name="parts",
-        limit_choices_to={"category__kind__in": PRODUCTION_KINDS},
-        help_text="В вариантах модели материал детали со слотом можно заменить на совместимый.",
-    )
-    batch_material_qty = positive_decimal_field(
-        "Расход материала на партию",
-    )
-    batch_material_unit = models.CharField(
-        "Единица расхода",
-        max_length=4,
-        choices=QtyUnit.choices,
-        blank=True,
-        default="",
-    )
     batch_minutes = models.DecimalField(
-        "Время на партию",
+        "Время типовой партии",
         max_digits=10,
         decimal_places=4,
         validators=[MinValueValidator(Decimal("0.01"))],
     )
     batch_size = models.PositiveIntegerField(
-        "Штук в партии",
+        "Штук в типовой партии",
         default=1,
         validators=[MinValueValidator(1)],
+        help_text="Сколько штук на одном столе или листе, как обычно печатаете.",
     )
     scrap_percent = percent_field("% брака", null=True, blank=True, help_text="Пусто — из станка.")
     model_file = models.FileField("Файл модели", upload_to="part_files/", blank=True)
@@ -195,14 +186,6 @@ class Part(UniqueNameModel):
 
     def clean(self):
         super().clean()
-        if self.batch_material_qty and self.batch_size:
-            if self.material_per_piece.quantize(Decimal("0.0001")) <= 0:
-                raise ValidationError(
-                    {
-                        "batch_material_qty": "Расход на одну штуку меньше 0,0001 — укажите "
-                        "партию крупнее или материал в более мелкой единице."
-                    }
-                )
         if self.pk and self.code and self.equipment_id:
             old_tech = self.code.split("-")[1]
             if old_tech != self.equipment.technology_code:
@@ -212,27 +195,222 @@ class Part(UniqueNameModel):
                         "Нажмите «Копировать деталь» и выберите другой станок."
                     }
                 )
-        if self.equipment_id and self.material_id:
-            if self.material.kind not in self.equipment.allowed_material_kinds:
-                raise ValidationError(
-                    {
-                        "material": f"Материал «{self.material}» не подходит для станка "
-                        f"«{self.equipment}» ({self.equipment.get_technology_display()})."
-                    }
-                )
 
     def save(self, *args, **kwargs):
         if not self.code:
             self.code = next_code(f"C-{self.equipment.technology_code}")
         super().save(*args, **kwargs)
 
+    # --- материалы ---
+
     @property
-    def material_per_piece(self) -> Decimal:
-        return self.batch_material_qty / self.batch_size
+    def positions(self) -> list[PartMaterial]:
+        """Позиции материалов по порядку (использует prefetch, если он был)."""
+        return list(self.materials.all())
+
+    @property
+    def main_position(self) -> PartMaterial | None:
+        positions = self.positions
+        return positions[0] if positions else None
+
+    @property
+    def material(self) -> Material | None:
+        """Материал по умолчанию первой позиции — для списков и фильтров."""
+        main = self.main_position
+        return main.material if main else None
 
     @property
     def hours_per_piece(self) -> Decimal:
         return self.batch_minutes / 60 / self.batch_size
+
+    def grams_per_piece(self) -> Decimal | None:
+        """Пластик на одну штуку по всем позициям в граммах; None — нечего считать."""
+        total, found = Decimal(0), False
+        for position in self.positions:
+            if position.material.unit == Unit.GRAM:
+                total += position.per_piece
+                found = True
+        return total if found else None
+
+    def slot_names(self) -> list[str]:
+        names: list[str] = []
+        for position in self.positions:
+            if position.slot and position.slot not in names:
+                names.append(position.slot)
+        return names
+
+
+class PartMaterial(models.Model):
+    """
+    Позиция материала детали: материал по умолчанию, расход на типовую партию и цветовая
+    группа. Группа говорит, что цвет этой позиции выбирает вариант; пустая группа — цвет
+    фиксирован (фанера, поддержки, всегда белые глаза).
+    """
+
+    part = models.ForeignKey(Part, on_delete=models.CASCADE, related_name="materials")
+    order = models.PositiveSmallIntegerField("№", default=1)
+    name = models.CharField(
+        "Позиция",
+        max_length=50,
+        blank=True,
+        help_text="Пусто у обычной детали; у композитной — «Корпус», «Глаза», «Узор».",
+    )
+    material = models.ForeignKey(
+        Material,
+        verbose_name="Материал по умолчанию",
+        on_delete=models.PROTECT,
+        related_name="part_positions",
+        limit_choices_to={"category__kind__in": PRODUCTION_KINDS},
+    )
+    batch_qty = positive_decimal_field("Расход на типовую партию")
+    batch_unit = models.CharField(
+        "Единица расхода",
+        max_length=4,
+        choices=QtyUnit.choices,
+        blank=True,
+        default="",
+    )
+    slot = models.CharField(
+        "Цветовая группа",
+        max_length=50,
+        blank=True,
+        help_text="Пусто — цвет не меняется.",
+    )
+
+    class Meta:
+        verbose_name = "Материал детали"
+        verbose_name_plural = "Материалы"
+        ordering = ["order", "pk"]
+
+    def __str__(self):
+        return f"{self.label}: {self.material}"
+
+    @property
+    def label(self) -> str:
+        if self.name:
+            return self.name
+        return "Материал" if self.order <= 1 else f"Материал {self.order}"
+
+    @property
+    def per_piece(self) -> Decimal:
+        return self.batch_qty / self.part.batch_size
+
+    def clean(self):
+        super().clean()
+        self.name = clean_name(self.name)
+        self.slot = clean_slot(self.slot)
+        try:
+            part = self.part  # в форме детали — ещё не сохранённая деталь
+        except Part.DoesNotExist:
+            part = None
+        if part is None:
+            return
+        if self.batch_qty and part.batch_size:
+            if (self.batch_qty / part.batch_size).quantize(Decimal("0.0001")) <= 0:
+                raise ValidationError(
+                    {
+                        "batch_qty": "Расход на одну штуку меньше 0,0001 — укажите "
+                        "партию крупнее или материал в более мелкой единице."
+                    }
+                )
+        if self.material_id and part.equipment_id:
+            equipment = part.equipment
+            if self.material.kind not in equipment.allowed_material_kinds:
+                raise ValidationError(
+                    {
+                        "material": f"Материал «{self.material}» не подходит для станка "
+                        f"«{equipment}» ({equipment.get_technology_display()})."
+                    }
+                )
+
+
+class PartColoring(models.Model):
+    """
+    Расцветка детали: из какого материала сделана каждая позиция. Это и есть «цвет» детали
+    на складе: «Плафон Луна (PLA Basic, белый)», «Фигурка (PLA чёрный + Глаза: PLA белый)».
+    Создаётся системой при выпуске и при создании вариантов; руками не заводится.
+    """
+
+    part = models.ForeignKey(Part, on_delete=models.CASCADE, related_name="colorings")
+    key = models.CharField(max_length=200, editable=False)
+    label = models.CharField("Расцветка", max_length=300, editable=False)
+
+    class Meta:
+        verbose_name = "Расцветка детали"
+        verbose_name_plural = "Расцветки деталей"
+        ordering = ["part__name", "label"]
+        constraints = [
+            models.UniqueConstraint(fields=["part", "key"], name="production_partcoloring_uniq")
+        ]
+
+    def __str__(self):
+        return f"{self.part} ({self.label})"
+
+    def materials(self) -> dict[int, Material]:
+        """{id позиции: материал}."""
+        return {item.position_id: item.material for item in self.items.all()}
+
+    @property
+    def main_material(self) -> Material | None:
+        items = list(self.items.all())
+        return items[0].material if items else None
+
+    @staticmethod
+    def build_key(part: Part, materials: dict[int, Material]) -> str:
+        return ";".join(f"{p.pk}:{materials[p.pk].pk}" for p in part.positions)
+
+    @staticmethod
+    def build_label(part: Part, materials: dict[int, Material]) -> str:
+        parts = []
+        for position in part.positions:
+            name = materials[position.pk].full_name
+            parts.append(f"{position.label}: {name}" if position.name else name)
+        return " + ".join(parts)
+
+    @classmethod
+    def get_for(cls, part: Part, materials: dict[int, Material] | None = None) -> PartColoring:
+        """Расцветка для набора материалов по позициям; не указанные позиции — по умолчанию."""
+        materials = materials or {}
+        resolved = {p.pk: materials.get(p.pk) or p.material for p in part.positions}
+        key = cls.build_key(part, resolved)
+        label = cls.build_label(part, resolved)
+        coloring, created = cls.objects.get_or_create(part=part, key=key, defaults={"label": label})
+        if created:
+            PartColoringItem.objects.bulk_create(
+                [
+                    PartColoringItem(coloring=coloring, position=p, material=resolved[p.pk])
+                    for p in part.positions
+                ]
+            )
+        elif coloring.label != label:
+            coloring.label = label
+            coloring.save(update_fields=["label"])
+        return coloring
+
+    def refresh_label(self) -> None:
+        label = self.build_label(self.part, self.materials())
+        if label != self.label:
+            self.label = label
+            self.save(update_fields=["label"])
+
+
+class PartColoringItem(models.Model):
+    coloring = models.ForeignKey(PartColoring, on_delete=models.CASCADE, related_name="items")
+    position = models.ForeignKey(
+        PartMaterial, on_delete=models.PROTECT, related_name="coloring_items"
+    )
+    material = models.ForeignKey(Material, on_delete=models.PROTECT, related_name="+")
+
+    class Meta:
+        ordering = ["position__order", "position_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["coloring", "position"], name="production_partcoloringitem_uniq"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.position.label}: {self.material}"
 
 
 class PartOperation(models.Model):
@@ -415,21 +593,25 @@ class ProductModel(UniqueNameModel):
         code = self.category.article_code
         return f"{code}{self.article_number:04d}" if code else ""
 
+    def slot_positions(self) -> dict[str, list[tuple[ModelPart, PartMaterial]]]:
+        """{цветовая группа: [(строка состава, позиция детали)]} в порядке появления в составе."""
+        result: dict[str, list[tuple[ModelPart, PartMaterial]]] = {}
+        lines = self.model_parts.select_related("part").prefetch_related(
+            "part__materials__material__category"
+        )
+        for line in lines.order_by("pk"):
+            for position in line.part.positions:
+                if position.slot:
+                    result.setdefault(position.slot, []).append((line, position))
+        return result
+
     def slot_names(self) -> list[str]:
-        """Цветовые слоты модели в порядке появления в составе."""
-        names: list[str] = []
-        for line in self.model_parts.order_by("pk"):
-            if line.slot and line.slot not in names:
-                names.append(line.slot)
-        return names
+        """Цветовые группы (слоты) модели: собираются из позиций её деталей."""
+        return list(self.slot_positions())
 
     def slot_default_materials(self) -> dict[str, Material]:
-        """Материал по умолчанию для каждого слота — из первой детали слота."""
-        result: dict[str, Material] = {}
-        for line in self.model_parts.select_related("part__material__category").order_by("pk"):
-            if line.slot and line.slot not in result:
-                result[line.slot] = line.part.material
-        return result
+        """Материал по умолчанию для каждой группы — из первой позиции в ней."""
+        return {slot: pairs[0][1].material for slot, pairs in self.slot_positions().items()}
 
     def calculated_weight_g(self) -> Decimal | None:
         """
@@ -437,9 +619,13 @@ class ProductModel(UniqueNameModel):
         в граммах (листовые и покупные части не учитываются). None — нечего считать.
         """
         total, found = Decimal(0), False
-        for line in self.model_parts.select_related("part__material"):
-            if line.part.material.unit == Unit.GRAM:
-                total += line.part.material_per_piece * line.quantity
+        lines = self.model_parts.select_related("part").prefetch_related(
+            "part__materials__material"
+        )
+        for line in lines:
+            grams = line.part.grams_per_piece()
+            if grams is not None:
+                total += grams * line.quantity
                 found = True
         return total.quantize(Decimal("0.1")) if found else None
 
@@ -453,12 +639,6 @@ class ModelPart(models.Model):
         related_name="model_lines",
     )
     quantity = models.PositiveIntegerField("Кол-во", default=1, validators=[MinValueValidator(1)])
-    slot = models.CharField(
-        "Цветовой слот",
-        max_length=50,
-        blank=True,
-        help_text="Детали с одинаковым слотом в варианте получают один цвет. Пусто — цвет не меняется.",
-    )
 
     class Meta:
         verbose_name = "Деталь в модели"
@@ -467,9 +647,27 @@ class ModelPart(models.Model):
     def __str__(self):
         return f"{self.part} × {self.quantity}"
 
-    def save(self, *args, **kwargs):
-        self.slot = clean_slot(self.slot)
-        super().save(*args, **kwargs)
+
+def slot_conflicts(parts: list[Part]) -> list[str]:
+    """
+    Детали одной цветовой группы должны быть из одной категории материалов и одной единицы:
+    иначе вариант не сможет выбрать для группы один материал.
+    """
+    seen: dict[str, tuple[Part, Material]] = {}
+    problems = []
+    for part in parts:
+        for position in part.positions:
+            if not position.slot:
+                continue
+            material = position.material
+            first_part, first = seen.setdefault(position.slot, (part, material))
+            if first.category_id != material.category_id or first.unit != material.unit:
+                problems.append(
+                    f"В группе «{position.slot}» детали из разных категорий: «{first_part}» "
+                    f"({first.category}) и «{part}» ({material.category}). Дайте одной из них "
+                    "другую группу в карточке детали."
+                )
+    return problems
 
 
 class ModelComponent(EnteredUnitMixin):
@@ -604,10 +802,10 @@ class Variant(ArchivableModel):
 
 
 class VariantSlot(models.Model):
-    """Какой материал идёт в слот модели. Строки создаются автоматически."""
+    """Какой материал идёт в цветовую группу (слот) модели. Строки создаются автоматически."""
 
     variant = models.ForeignKey(Variant, on_delete=models.CASCADE, related_name="slots")
-    slot = models.CharField("Слот", max_length=50)
+    slot = models.CharField("Группа", max_length=50)
     material = models.ForeignKey(
         Material,
         verbose_name="Материал",
@@ -619,8 +817,8 @@ class VariantSlot(models.Model):
     )
 
     class Meta:
-        verbose_name = "Слот варианта"
-        verbose_name_plural = "Цвета по слотам"
+        verbose_name = "Цвет группы варианта"
+        verbose_name_plural = "Цвета по группам"
         ordering = ["pk"]
         constraints = [
             models.UniqueConstraint(fields=["variant", "slot"], name="production_variantslot_uniq")
@@ -637,7 +835,7 @@ class VariantSlot(models.Model):
         if default and self.material.category_id != default.category_id:
             raise ValidationError(
                 {
-                    "material": f"Для слота «{self.slot}» подходят только материалы категории "
+                    "material": f"Для группы «{self.slot}» подходят только материалы категории "
                     f"«{default.category}»."
                 }
             )
