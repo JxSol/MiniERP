@@ -22,6 +22,7 @@ from catalog.models import (
     OperationType,
     QtyUnit,
     Unit,
+    categories_text,
 )
 from core.models import (
     ArchivableModel,
@@ -597,7 +598,7 @@ class ProductModel(UniqueNameModel):
         """{цветовая группа: [(строка состава, позиция детали)]} в порядке появления в составе."""
         result: dict[str, list[tuple[ModelPart, PartMaterial]]] = {}
         lines = self.model_parts.select_related("part").prefetch_related(
-            "part__materials__material__category"
+            "part__materials__material__category__interchangeable"
         )
         for line in lines.order_by("pk"):
             for position in line.part.positions:
@@ -609,9 +610,27 @@ class ProductModel(UniqueNameModel):
         """Цветовые группы (слоты) модели: собираются из позиций её деталей."""
         return list(self.slot_positions())
 
-    def slot_default_materials(self) -> dict[str, Material]:
+    def slot_default_materials(self, positions=None) -> dict[str, Material]:
         """Материал по умолчанию для каждой группы — из первой позиции в ней."""
-        return {slot: pairs[0][1].material for slot, pairs in self.slot_positions().items()}
+        if positions is None:
+            positions = self.slot_positions()
+        return {slot: pairs[0][1].material for slot, pairs in positions.items()}
+
+    def slot_allowed_categories(self, positions=None) -> dict[str, set[int]]:
+        """
+        Из каких категорий вариант может взять материал группы: категория должна подходить
+        каждой позиции группы — та же, что у материала по умолчанию, или взаимозаменяемая с ней.
+        """
+        if positions is None:
+            positions = self.slot_positions()
+        result = {}
+        for slot, pairs in positions.items():
+            allowed = set.intersection(
+                *(position.material.category.compatible_ids() for _, position in pairs)
+            )
+            # категория материала по умолчанию подходит группе всегда
+            result[slot] = allowed | {pairs[0][1].material.category_id}
+        return result
 
     def calculated_weight_g(self) -> Decimal | None:
         """
@@ -650,24 +669,42 @@ class ModelPart(models.Model):
 
 def slot_conflicts(parts: list[Part]) -> list[str]:
     """
-    Детали одной цветовой группы должны быть из одной категории материалов и одной единицы:
-    иначе вариант не сможет выбрать для группы один материал.
+    Материалы по умолчанию в одной цветовой группе должны подходить друг другу: одна единица
+    расхода и одна категория либо взаимозаменяемые. Иначе вариант не сможет выбрать для группы
+    один материал. Сверяется каждая пара: взаимозаменяемость не передаётся по цепочке.
     """
-    seen: dict[str, tuple[Part, Material]] = {}
+    seen: dict[str, list[tuple[Part, Material]]] = {}
     problems = []
     for part in parts:
         for position in part.positions:
             if not position.slot:
                 continue
             material = position.material
-            first_part, first = seen.setdefault(position.slot, (part, material))
-            if first.category_id != material.category_id or first.unit != material.unit:
-                problems.append(
-                    f"В группе «{position.slot}» детали из разных категорий: «{first_part}» "
-                    f"({first.category}) и «{part}» ({material.category}). Дайте одной из них "
-                    "другую группу в карточке детали."
-                )
+            others = seen.setdefault(position.slot, [])
+            for other_part, other in others:
+                problem = _slot_mismatch(position.slot, other_part, other, part, material)
+                if problem:
+                    problems.append(problem)
+                    break
+            others.append((part, material))
     return problems
+
+
+def _slot_mismatch(slot: str, first_part, first: Material, part, material: Material) -> str:
+    """Почему два материала не могут стоять в одной цветовой группе; пусто — могут."""
+    advice = "Дайте одной из них другую группу в карточке детали"
+    if first.category_id not in material.category.compatible_ids():
+        return (
+            f"В группе «{slot}» детали из разных категорий: «{first_part}» "
+            f"({first.category}) и «{part}» ({material.category}). {advice} или отметьте "
+            "эти категории взаимозаменяемыми."
+        )
+    if first.unit != material.unit:
+        return (
+            f"В группе «{slot}» у деталей разные единицы расхода: «{first_part}» "
+            f"({first.get_unit_display()}) и «{part}» ({material.get_unit_display()}). {advice}."
+        )
+    return ""
 
 
 class ModelComponent(EnteredUnitMixin):
@@ -831,15 +868,20 @@ class VariantSlot(models.Model):
         super().clean()
         if not (self.variant_id and self.material_id):
             return
-        default = self.variant.model.slot_default_materials().get(self.slot)
-        if default and self.material.category_id != default.category_id:
+        model = self.variant.model
+        positions = model.slot_positions()
+        default = model.slot_default_materials(positions).get(self.slot)
+        if not default:
+            return
+        allowed = model.slot_allowed_categories(positions)[self.slot]
+        if self.material.category_id not in allowed:
             raise ValidationError(
                 {
-                    "material": f"Для группы «{self.slot}» подходят только материалы категории "
-                    f"«{default.category}»."
+                    "material": f"Для группы «{self.slot}» подходят только материалы "
+                    f"{categories_text(allowed)}."
                 }
             )
-        if default and self.material.unit != default.unit:
+        if self.material.unit != default.unit:
             raise ValidationError(
                 {
                     "material": f"Расход детали задан в «{default.get_unit_display()}», "

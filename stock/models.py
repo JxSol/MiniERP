@@ -30,6 +30,7 @@ from catalog.models import (
     MaterialForm,
     MaterialOffer,
     Supplier,
+    categories_text,
 )
 from core.models import (
     CodeField,
@@ -960,11 +961,12 @@ class ProductionRunMaterial(EnteredUnitMixin):
         super().clean()
         if self.position_id and self.material_id:
             default = self.position.material
-            if self.material.category_id != default.category_id:
+            allowed = default.category.compatible_ids()
+            if self.material.category_id not in allowed:
                 raise ValidationError(
                     {
-                        "material": f"Позиция «{self.position.label}» делается из "
-                        f"«{default.category}»."
+                        "material": f"Позиция «{self.position.label}» делается из материалов "
+                        f"{categories_text(allowed)}."
                     }
                 )
             if self.material.unit != default.unit:

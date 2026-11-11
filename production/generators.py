@@ -31,8 +31,10 @@ def _operation(key: str) -> OperationType | None:
     return OperationType.objects.filter(key=key, is_active=True).first()
 
 
-def slot_category_ids(model: ProductModel) -> set[int]:
-    return {m.category_id for m in model.slot_default_materials().values()}
+def common_category_ids(model: ProductModel) -> set[int]:
+    """Категории материалов, которые подходят сразу всем цветовым группам модели."""
+    allowed = list(model.slot_allowed_categories().values())
+    return set.intersection(*allowed) if allowed else set()
 
 
 # --- Поштучный товар ---------------------------------------------------------------
@@ -89,13 +91,15 @@ def create_material_variants(
     Одноцветные варианты: во все слоты модели — выбранный материал («PLA Basic, зелёный»).
     Название варианта — цвет материала. Уже существующие названия пропускаются.
     """
-    categories = slot_category_ids(model)
-    if not categories:
-        raise ValidationError("У модели нет цветовых слотов — укажите слот хотя бы у одной детали.")
-    if len(categories) > 1:
+    if not model.slot_names():
         raise ValidationError(
-            "Генератор работает, когда все слоты модели из одной категории материалов. "
-            "Многоцветные варианты создайте вручную."
+            "У модели нет цветовых групп — укажите группу хотя бы у одной позиции детали."
+        )
+    categories = common_category_ids(model)
+    if not categories:
+        raise ValidationError(
+            "Генератор работает, когда всем цветовым группам модели подходит один и тот же "
+            "материал. Многоцветные варианты создайте вручную."
         )
     wrong = [m for m in materials if m.category_id not in categories]
     if wrong:

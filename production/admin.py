@@ -345,7 +345,7 @@ class PartAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, ArchiveAd
 
 
 class ModelPartFormSet(BaseInlineFormSet):
-    """Детали одной цветовой группы должны быть из одной категории материалов."""
+    """Детали одной цветовой группы — из одной категории материалов или из взаимозаменяемых."""
 
     def clean(self):
         super().clean()
@@ -428,7 +428,7 @@ class MaterialVariantsForm(BaseDialogForm):
     def __init__(self, request, object_id=None, *args, **kwargs):
         super().__init__(request, object_id, *args, **kwargs)
         self.model_obj = get_object_or_404(ProductModel, pk=object_id)
-        categories = generators.slot_category_ids(self.model_obj)
+        categories = generators.common_category_ids(self.model_obj)
         self.fields["materials"].queryset = (
             Material.objects.filter(is_active=True, category_id__in=categories)
             .select_related("color")
@@ -788,7 +788,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
 
 
 class VariantSlotForm(ActiveChoicesForm):
-    """Материал группы — только из категории детали по умолчанию."""
+    """Материал группы — из категории её деталей или из взаимозаменяемой с ней."""
 
     class Meta:
         model = VariantSlot
@@ -799,10 +799,10 @@ class VariantSlotForm(ActiveChoicesForm):
         slot = self.instance
         if not slot.pk:
             return
-        default = slot.variant.model.slot_default_materials().get(slot.slot)
-        if default:
+        allowed = slot.variant.model.slot_allowed_categories().get(slot.slot)
+        if allowed:
             self.fields["material"].queryset = (
-                self.fields["material"].queryset.filter(category_id=default.category_id)
+                self.fields["material"].queryset.filter(category_id__in=allowed)
             ).select_related("color")
 
 

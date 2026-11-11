@@ -5,7 +5,7 @@ from django.contrib import admin
 from django.db.models import Avg, DecimalField, ExpressionWrapper, F, Q
 from django.utils.html import format_html, format_html_join, mark_safe
 from unfold.decorators import display
-from unfold.widgets import UnfoldAdminTextInputWidget
+from unfold.widgets import UnfoldAdminSelect2MultipleWidget, UnfoldAdminTextInputWidget
 
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
 from core.admin_utils import (
@@ -36,14 +36,30 @@ from .models import (
 # --- Категории материалов ----------------------------------------------------------
 
 
+USERS_SHOWN = 5  # сколько мест использования связи перечислять в сообщении
+
+
 class MaterialCategoryForm(forms.ModelForm):
+    # Поле объявлено явно: список с поиском и крестиками, без кнопки «+» у связи на себя
+    interchangeable = MaterialCategory._meta.get_field("interchangeable").formfield(
+        widget=UnfoldAdminSelect2MultipleWidget(attrs={"style": "width: 100%"})
+    )
+
     class Meta:
         model = MaterialCategory
-        fields = ("name", "parent", "kind", "is_active", "notes")
+        fields = ("name", "parent", "kind", "interchangeable", "is_active", "notes")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["kind"].required = False
+        # У новой категории вид ещё не выбран — предлагаем все, вид сверяется при сохранении
+        choices = MaterialCategory.objects.filter(is_active=True)
+        if self.instance.pk:
+            linked = self.instance.interchangeable.values("pk")
+            choices = MaterialCategory.objects.filter(
+                Q(is_active=True, kind=self.instance.kind) | Q(pk__in=linked)
+            ).exclude(pk=self.instance.pk)
+        self.fields["interchangeable"].queryset = choices
 
     def clean(self):
         data = super().clean()
@@ -53,16 +69,53 @@ class MaterialCategoryForm(forms.ModelForm):
             self.instance.kind = parent.kind
         elif not data.get("kind"):
             self.add_error("kind", "У категории верхнего уровня нужно выбрать вид материала.")
+        self._check_interchangeable(data)
         return data
+
+    def _check_interchangeable(self, data):
+        chosen = list(data.get("interchangeable") or [])
+        kind = data.get("kind")
+        wrong = [f"«{category}»" for category in chosen if kind and category.kind != kind]
+        if wrong:
+            self.add_error(
+                "interchangeable",
+                "Взаимозаменяемыми бывают только категории одного вида материала. "
+                f"Не подходят: {', '.join(wrong)}.",
+            )
+        if not self.instance.pk:
+            return
+        # Связь, на которой уже держатся варианты и модели, убрать нельзя
+        from production.services import interchange_users
+
+        removed = self.instance.interchangeable.exclude(pk__in=[c.pk for c in chosen])
+        for other in removed:
+            users = interchange_users(self.instance.pk, other.pk)
+            if not users:
+                continue
+            shown = ", ".join(users[:USERS_SHOWN])
+            if len(users) > USERS_SHOWN:
+                shown += f" и ещё {len(users) - USERS_SHOWN}"
+            self.add_error(
+                "interchangeable",
+                f"Связь с «{other}» убрать нельзя, она используется: {shown}. "
+                "Сначала поменяйте там материал.",
+            )
 
 
 @admin.register(MaterialCategory)
 class MaterialCategoryAdmin(ArchiveAdmin):
     form = MaterialCategoryForm
-    list_display = ("path", "kind", "is_active")
+    list_display = ("path", "kind", "interchangeable_display", "is_active")
     list_filter = ("kind",)
     search_fields = ("name", "path")
     ordering = ("path",)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("interchangeable")
+
+    @display(description="Взаимозаменяема с")
+    def interchangeable_display(self, obj):
+        return ", ".join(category.name for category in obj.interchangeable.all()) or "—"
 
 
 # --- Палитра, производители, поставщики ---------------------------------------------

@@ -92,6 +92,14 @@ class MaterialCategory(UniqueNameModel):
         help_text="У вложенной категории берётся от родителя.",
     )
     path = models.CharField("Полное название", max_length=500, editable=False, db_index=True)
+    # Связь зеркальная (symmetrical): отметили PETG у PLA — у PETG появился PLA
+    interchangeable = models.ManyToManyField(
+        "self",
+        verbose_name="Взаимозаменяема с",
+        blank=True,
+        help_text="Материалы этих категорий можно ставить вместо материалов этой — в варианте "
+        "и при выпуске. Связь зеркальная: у выбранных категорий она появится сама.",
+    )
 
     name_scope = ("parent",)
 
@@ -125,6 +133,20 @@ class MaterialCategory(UniqueNameModel):
         super().save(*args, **kwargs)
         for child in self.children.all():
             child.save()
+
+    def compatible_ids(self) -> set[int]:
+        """
+        Категории, материалы которых подходят вместо материалов этой: она сама и те, что
+        отмечены взаимозаменяемыми. Только прямые связи: PLA ↔ PETG и PETG ↔ ABS не делают
+        взаимозаменяемыми PLA и ABS.
+        """
+        return {self.pk, *(category.pk for category in self.interchangeable.all())}
+
+
+def categories_text(ids) -> str:
+    """«категории «Пластик → PLA»» или «категорий «… PLA», «… PETG»» — для сообщений."""
+    names = [f"«{category}»" for category in MaterialCategory.objects.filter(pk__in=ids)]
+    return ("категории " if len(names) == 1 else "категорий ") + ", ".join(names)
 
 
 class Color(UniqueNameModel):
