@@ -401,7 +401,7 @@ class MaterialChoiceField(forms.ModelMultipleChoiceField):
     """Галочки с образцами цвета (ТЗ п. 5.1)."""
 
     def label_from_instance(self, material):
-        swatch = color_swatch(material.color.hex, material.color.name) if material.color_id else ""
+        swatch = color_swatch(material.color) if material.color_id else ""
         return format_html("{}{}", swatch, material.full_name)
 
 
@@ -432,6 +432,7 @@ class MaterialVariantsForm(BaseDialogForm):
         self.fields["materials"].queryset = (
             Material.objects.filter(is_active=True, category_id__in=categories)
             .select_related("color")
+            .prefetch_related("color__components")
             .order_by("name", "color__order")
         )
 
@@ -551,7 +552,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
             super()
             .get_queryset(request)
             .select_related("category", "size")
-            .prefetch_related("variants__slots__material__color")
+            .prefetch_related("variants__slots__material__color__components")
             .annotate(variant_count=Count("variants"))
         )
 
@@ -583,7 +584,7 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
             if variant.coloring == Coloring.RANDOM:
                 swatches.append(format_html('<span title="{}">🎲</span>', variant.name))
             for color in colors[:1]:
-                swatches.append(color_swatch(color.hex, variant.name))
+                swatches.append(color_swatch(color, variant.name))
         return format_html("".join(["{}"] * len(swatches)), *swatches) if swatches else "—"
 
     @display(description="Себестоимость", ordering="cost_cached")
@@ -617,15 +618,13 @@ class ProductModelAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, A
             return "Сохраните модель, затем создайте варианты кнопкой «Создать варианты» вверху."
         rows = []
         show_cost = can_view_cost()
-        for v in obj.variants.prefetch_related("slots__material__color"):
+        for v in obj.variants.prefetch_related("slots__material__color__components"):
             slots = format_html_join(
                 ", ",
                 "{}{}",
                 (
                     (
-                        color_swatch(s.material.color.hex, s.material.color.name)
-                        if s.material.color_id
-                        else "",
+                        color_swatch(s.material.color) if s.material.color_id else "",
                         f"{s.slot}: {s.material}",
                     )
                     for s in v.slots.all()
@@ -820,7 +819,7 @@ class VariantSlotInline(LineInline):
     @display(description="")
     def swatch(self, obj):
         color = obj.material.color if obj.material_id else None
-        return color_swatch(color.hex, color.name) if color else ""
+        return color_swatch(color) if color else ""
 
 
 @admin.register(Variant)
@@ -868,7 +867,7 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
             super()
             .get_queryset(request)
             .select_related("model")
-            .prefetch_related("slots__material__color")
+            .prefetch_related("slots__material__color__components")
         )
 
     def get_readonly_fields(self, request, obj=None):
@@ -900,11 +899,7 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
     def swatches(self, obj):
         if obj.coloring == Coloring.RANDOM:
             return "🎲"
-        items = [
-            color_swatch(s.material.color.hex, s.material.color.name)
-            for s in obj.slots.all()
-            if s.material.color_id
-        ]
+        items = [color_swatch(s.material.color) for s in obj.slots.all() if s.material.color_id]
         return format_html("".join(["{}"] * len(items)), *items) if items else "—"
 
     @display(description="Поштучный товар")

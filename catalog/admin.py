@@ -4,7 +4,7 @@ from django import forms
 from django.contrib import admin
 from django.db.models import Avg, DecimalField, ExpressionWrapper, F, Q
 from django.utils.html import format_html, format_html_join, mark_safe
-from unfold.decorators import display
+from unfold.decorators import action, display
 from unfold.widgets import UnfoldAdminSelect2MultipleWidget, UnfoldAdminTextInputWidget
 
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
@@ -17,10 +17,14 @@ from core.admin_utils import (
     fmt_quantity,
 )
 from core.forms import ActiveChoicesForm
+from core.models import name_key
 
 from .models import (
     FORM_UNITS,
+    MIX_MAX_COLORS,
+    MIX_MIN_COLORS,
     Color,
+    ColorKind,
     Equipment,
     Manufacturer,
     Material,
@@ -30,6 +34,7 @@ from .models import (
     MaterialPriceHistory,
     OperationType,
     Supplier,
+    mix_name,
     next_free_cipher,
 )
 
@@ -173,6 +178,8 @@ def normalize_hex(value: str) -> str:
 
 
 class ColorForm(forms.ModelForm):
+    """Обычный цвет: название и образец HEX."""
+
     class Meta:
         model = Color
         fields = ("name", "hex", "order", "is_active", "notes")
@@ -182,17 +189,187 @@ class ColorForm(forms.ModelForm):
         return normalize_hex(self.cleaned_data.get("hex", ""))
 
 
+class RainbowColorForm(forms.ModelForm):
+    """«Радуга»: образец задан системой, меняются только название и порядок."""
+
+    class Meta:
+        model = Color
+        fields = ("name", "order", "is_active", "notes")
+
+
+# Кружок-образец у каждого цвета в списке выбора. Список включается здесь же, раньше общего
+# включения unfold (оно уже включённые списки не трогает).
+SWATCH_OPTIONS_JS = """<script>
+(function () {
+    const $ = django.jQuery;
+    const withSwatch = (state) => {
+        const css = state.element && state.element.dataset.swatch;
+        if (!css) { return state.text; }
+        const dot = $("<span>").css({
+            display: "inline-block", width: "14px", height: "14px", borderRadius: "50%",
+            background: css, border: "1px solid rgba(0,0,0,.25)",
+            verticalAlign: "middle", marginRight: "6px",
+        });
+        return $("<span>").append(dot, document.createTextNode(state.text));
+    };
+    $(document.currentScript.previousElementSibling).select2({
+        templateResult: withSwatch,
+        templateSelection: withSwatch,
+    });
+})();
+</script>"""
+
+
+class ColorMultiSelect(UnfoldAdminSelect2MultipleWidget):
+    """Список цветов с поиском: кружок-образец виден и в списке, и у выбранных цветов."""
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex, attrs)
+        color = getattr(value, "instance", None)
+        if color is not None:
+            option["attrs"]["data-swatch"] = color.swatch_css
+        return option
+
+    def render(self, name, value, attrs=None, renderer=None):
+        select = super().render(name, value, attrs, renderer)
+        return format_html("{}{}", select, mark_safe(SWATCH_OPTIONS_JS))
+
+
+class MixColorForm(forms.ModelForm):
+    """Составной цвет: собирается из обычных цветов палитры, образец рисуется по составу."""
+
+    mix = forms.ModelMultipleChoiceField(
+        label="Состав",
+        queryset=Color.objects.none(),
+        widget=ColorMultiSelect(attrs={"style": "width: 100%"}),
+        help_text=f"От {MIX_MIN_COLORS} до {MIX_MAX_COLORS} обычных цветов палитры. Порядок "
+        "не важен: «красный + синий» и «синий + красный» — один и тот же цвет.",
+    )
+
+    class Meta:
+        model = Color
+        fields = ("name", "order", "is_active", "notes")
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        name = self.fields["name"]
+        name.required = False
+        name.help_text = "Можно не заполнять: подставится по составу, например «Красный + синий»."
+        order = self.fields["order"]
+        order.required = False
+        order.help_text = (
+            "Можно не заполнять: цвет встанет в палитре рядом с первым цветом состава."
+        )
+        choices = Q(kind=ColorKind.PLAIN, is_active=True)
+        self.old_colors = []
+        if self.instance.pk:
+            self.old_colors = self.instance.mix_colors()
+            choices |= Q(pk__in=[color.pk for color in self.old_colors])
+            self.initial["mix"] = [color.pk for color in self.old_colors]
+        else:
+            self.initial["order"] = None  # пусто вместо нуля: порядок подставится по составу
+        self.fields["mix"].queryset = Color.objects.filter(choices)
+
+    def clean(self):
+        data = super().clean()
+        if data.get("mix") is None:
+            return data
+        try:
+            colors = Color.check_mix(data["mix"], exclude_pk=self.instance.pk)
+        except forms.ValidationError as error:
+            self.add_error("mix", error)
+            return data
+        # Название не трогали (пусто или осталось прежнее «по составу») — строим по новому составу
+        name = data.get("name") or ""
+        auto_name = mix_name(self.old_colors) if self.old_colors else ""
+        if not name or name_key(name) == name_key(auto_name):
+            data["name"] = mix_name(colors)
+        if data.get("order") is None:
+            data["order"] = colors[0].order
+        self.instance.prepare_mix(colors)
+        return data
+
+    def _save_m2m(self):
+        super()._save_m2m()
+        self.instance.components.set(self.cleaned_data["mix"])
+
+
+COLOR_FORMS = {
+    ColorKind.PLAIN: ColorForm,
+    ColorKind.MIX: MixColorForm,
+    ColorKind.RAINBOW: RainbowColorForm,
+}
+COLOR_FIELDS = {
+    ColorKind.PLAIN: ("name", "hex", "order", "is_active", "notes"),
+    ColorKind.MIX: ("mix", "sample_preview", "name", "order", "is_active", "notes"),
+    ColorKind.RAINBOW: ("name", "sample_preview", "order", "is_active", "notes"),
+}
+
+
 @admin.register(Color)
 class ColorAdmin(ArchiveAdmin):
+    """
+    Палитра. У обычного цвета, составного и «Радуги» разные формы: вид задаётся при создании
+    (кнопки «Добавить цвет» и «Добавить составной цвет») и потом не меняется.
+    """
+
     form = ColorForm
-    list_display = ("swatch", "name", "hex", "order", "is_active")
+    list_display = ("swatch", "name", "sample_display", "order", "is_active")
     list_display_links = ("swatch", "name")
     list_editable = ("order",)
-    search_fields = ("name",)
+    list_filter = ("kind",)
+    # по названию цвета из состава находится и составной: «красный» покажет «Красно-синий»
+    search_fields = ("name", "components__name")
+    readonly_fields = ("sample_preview",)
+    actions_list = ("add_mix",)
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).prefetch_related("components")
+
+    def _kind(self, request, obj) -> str:
+        return obj.kind if obj else getattr(request, "color_kind", ColorKind.PLAIN)
+
+    def get_form(self, request, obj=None, change=False, **kwargs):
+        kwargs.setdefault("form", COLOR_FORMS[self._kind(request, obj)])
+        return super().get_form(request, obj, change=change, **kwargs)
+
+    def get_fields(self, request, obj=None):
+        fields = COLOR_FIELDS[self._kind(request, obj)]
+        # у нового цвета образца ещё нет
+        return fields if obj else tuple(name for name in fields if name != "sample_preview")
+
+    def has_delete_permission(self, request, obj=None):
+        # «Радугу» из палитры заново не создать — её можно только отправить в архив
+        if obj is not None and obj.kind == ColorKind.RAINBOW:
+            return False
+        return super().has_delete_permission(request, obj)
+
+    @action(
+        description="Добавить составной цвет",
+        icon="palette",
+        url_path="add-mix",
+        permissions=["add"],
+    )
+    def add_mix(self, request):
+        """Та же страница добавления, но с формой составного цвета."""
+        request.color_kind = ColorKind.MIX
+        return self.add_view(request, extra_context={"title": "Добавить составной цвет"})
 
     @display(description="")
     def swatch(self, obj):
-        return color_swatch(obj.hex, obj.name)
+        return color_swatch(obj)
+
+    @display(description="Образец")
+    def sample_display(self, obj):
+        if obj.kind == ColorKind.RAINBOW:
+            return "плавный спектр"
+        if obj.is_mix:
+            return " + ".join(color.name for color in obj.mix_colors())
+        return obj.hex
+
+    @display(description="Образец")
+    def sample_preview(self, obj):
+        return format_html("{}{}", color_swatch(obj), self.sample_display(obj))
 
 
 @admin.register(Manufacturer)
@@ -413,7 +590,7 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
             super()
             .get_queryset(request)
             .select_related("category", "color")
-            .prefetch_related("offers__manufacturer", "offers__supplier")
+            .prefetch_related("offers__manufacturer", "offers__supplier", "color__components")
             .annotate(
                 unit_price_db=Avg(
                     ExpressionWrapper(
@@ -438,7 +615,7 @@ class MaterialAdmin(HistoryAdmin, ArchiveAdmin):
 
     @display(description="")
     def swatch(self, obj):
-        return color_swatch(obj.color.hex, obj.color.name) if obj.color_id else ""
+        return color_swatch(obj.color) if obj.color_id else ""
 
     @display(description="Материал", ordering="name")
     def full_name_display(self, obj):

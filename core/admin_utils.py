@@ -93,13 +93,17 @@ def fmt_number(value: Decimal | None) -> str:
     return text.replace(",", " ").replace(".", ",")
 
 
-def color_swatch(hex_value: str, title: str = "") -> str:
+def color_swatch(color, title: str | None = None) -> str:
+    """
+    Кружок-образец цвета палитры: у обычного один цвет, у составного — секторы,
+    у «Радуги» — спектр. Подсказка при наведении — название цвета или title.
+    """
     return format_html(
         '<span title="{}" style="display:inline-block;width:14px;height:14px;border-radius:50%;'
         'background:{};border:1px solid rgba(0,0,0,.25);vertical-align:middle;margin-right:4px">'
         "</span>",
-        title,
-        hex_value,
+        color.name if title is None else title,
+        color.swatch_css,
     )
 
 

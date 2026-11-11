@@ -149,22 +149,191 @@ def categories_text(ids) -> str:
     return ("категории " if len(names) == 1 else "категорий ") + ", ".join(names)
 
 
-class Color(UniqueNameModel):
-    """Единая палитра цветов. Ведёт только администратор (ТЗ п. 5.6)."""
+class ColorKind(models.TextChoices):
+    PLAIN = "plain", "Обычный"
+    MIX = "mix", "Составной"
+    RAINBOW = "rainbow", "Радуга"
 
+
+MIX_MIN_COLORS = 2
+MIX_MAX_COLORS = 8  # больше секторов в кружке-образце уже не разобрать
+
+# Образец «Радуги»: плавный спектр по кругу, замкнутый на первый цвет
+RAINBOW_SWATCH = (
+    "conic-gradient(#F44336, #FF9800, #FFEB3B, #4CAF50, #00BCD4, #3F51B5, #9C27B0, #F44336)"
+)
+
+
+def palette_order(colors) -> list["Color"]:
+    """Цвета в порядке палитры — так идут секторы образца и слова в названии по составу."""
+    return sorted(colors, key=lambda color: (color.order, color.name))
+
+
+def mix_key(colors) -> str:
+    """Ключ состава: «красный + синий» и «синий + красный» — один и тот же цвет."""
+    return "-".join(str(pk) for pk in sorted({color.pk for color in colors}))
+
+
+def mix_name(colors) -> str:
+    """Название по составу, когда своё не задано: «Красный + синий»."""
+    names = [color.name for color in palette_order(colors)]
+    return " + ".join([names[0], *(name.lower() for name in names[1:])])
+
+
+class Color(UniqueNameModel):
+    """
+    Единая палитра цветов. Ведёт только администратор (ТЗ п. 5.6).
+
+    Обычный цвет — название и образец HEX. Составной собран из нескольких обычных: так
+    заводятся двух- и трёхцветные катушки и градиенты, а дубль ловится по составу, как бы
+    цвет ни назвали. «Радуга» — готовый цвет с образцом-спектром, состава у неё нет.
+    """
+
+    kind = models.CharField(
+        "Вид", max_length=10, choices=ColorKind.choices, default=ColorKind.PLAIN, editable=False
+    )
+    # У составного цвета и «Радуги» образец рисуется не по этому полю (см. swatch_css)
     hex = models.CharField(
         "Образец (HEX)",
         max_length=7,
         default="#FFFFFF",
         validators=[RegexValidator(r"^#[0-9A-Fa-f]{6}$", "Формат #RRGGBB")],
     )
+    components = models.ManyToManyField(
+        "self",
+        verbose_name="Состав",
+        symmetrical=False,
+        through="ColorComponent",
+        through_fields=("mix", "color"),
+        related_name="mixes",
+        blank=True,
+    )
+    # Номера цветов состава по возрастанию: по нему база не даёт завести второй такой же
+    components_key = models.CharField(max_length=100, blank=True, default="", editable=False)
     order = models.PositiveIntegerField("Порядок", default=0)
 
     class Meta:
         verbose_name = "Цвет"
         verbose_name_plural = "Палитра цветов"
         ordering = ["order", "name"]
-        constraints = [models.UniqueConstraint(fields=["name_key"], name="catalog_color_name_uniq")]
+        constraints = [
+            models.UniqueConstraint(fields=["name_key"], name="catalog_color_name_uniq"),
+            models.UniqueConstraint(
+                fields=["components_key"],
+                condition=~models.Q(components_key=""),
+                name="catalog_color_mix_uniq",
+            ),
+            models.UniqueConstraint(
+                fields=["kind"],
+                condition=models.Q(kind=ColorKind.RAINBOW),
+                name="catalog_color_one_rainbow",
+            ),
+            # состав есть у составного цвета и только у него
+            models.CheckConstraint(
+                condition=(
+                    models.Q(kind=ColorKind.MIX) & ~models.Q(components_key="")
+                    | ~models.Q(kind=ColorKind.MIX) & models.Q(components_key="")
+                ),
+                name="catalog_color_mix_has_components",
+            ),
+        ]
+
+    @property
+    def is_mix(self) -> bool:
+        return self.kind == ColorKind.MIX
+
+    def mix_colors(self) -> list["Color"]:
+        """Цвета состава в порядке палитры; у обычного цвета и «Радуги» список пуст."""
+        return palette_order(self.components.all()) if self.is_mix else []
+
+    @property
+    def swatch_css(self) -> str:
+        """
+        CSS-фон кружка-образца: один цвет, секторы составного (половинки, трети…)
+        или плавный спектр «Радуги».
+        """
+        if self.kind == ColorKind.RAINBOW:
+            return RAINBOW_SWATCH
+        hexes = [color.hex for color in self.mix_colors()]
+        if len(hexes) < MIX_MIN_COLORS:
+            return self.hex
+        step = 100 / len(hexes)
+        stops = ", ".join(
+            f"{hex_} {round(index * step, 2):g}% {round((index + 1) * step, 2):g}%"
+            for index, hex_ in enumerate(hexes)
+        )
+        # отсчёт снизу по часовой стрелке: у двух цветов первый слева, второй справа
+        return f"conic-gradient(from 180deg, {stops})"
+
+    @classmethod
+    def check_mix(cls, colors, exclude_pk: int | None = None) -> list["Color"]:
+        """Проверяет состав составного цвета и возвращает его в порядке палитры."""
+        colors = palette_order({color.pk: color for color in colors}.values())
+        if len(colors) < MIX_MIN_COLORS:
+            raise ValidationError("В составном цвете должно быть хотя бы два цвета.")
+        if len(colors) > MIX_MAX_COLORS:
+            raise ValidationError(
+                f"В составном цвете может быть не больше {MIX_MAX_COLORS} цветов."
+            )
+        wrong = [f"«{color.name}»" for color in colors if color.kind != ColorKind.PLAIN]
+        if wrong:
+            raise ValidationError(
+                "Составной цвет собирается только из обычных цветов. "
+                f"Не подходят: {', '.join(wrong)}."
+            )
+        same = cls.objects.filter(components_key=mix_key(colors)).exclude(pk=exclude_pk).first()
+        if same:
+            archived = "" if same.is_active else " (в архиве)"
+            raise ValidationError(
+                f"Такой составной цвет уже есть: «{same.name}»{archived}. "
+                "Используйте его вместо нового."
+            )
+        return colors
+
+    def prepare_mix(self, colors) -> None:
+        """
+        Делает цвет составным до сохранения; сам состав записывается после него
+        (components.set). Пустое название подставляется по составу.
+        """
+        colors = palette_order(colors)
+        self.kind = ColorKind.MIX
+        self.components_key = mix_key(colors)
+        self.hex = colors[0].hex  # запасной одиночный образец: первый цвет состава
+        if not self.name:
+            self.name = mix_name(colors)
+
+    @classmethod
+    def create_mix(cls, colors, name: str = "", **fields) -> "Color":
+        """Составной цвет из обычных цветов палитры: Color.create_mix([красный, синий])."""
+        colors = cls.check_mix(colors)
+        fields.setdefault("order", colors[0].order)  # в палитре — рядом с первым цветом состава
+        color = cls(name=name, **fields)
+        color.prepare_mix(colors)
+        color.full_clean()
+        color.save()
+        color.components.set(colors)
+        return color
+
+
+class ColorComponent(models.Model):
+    """Цвет в составе составного цвета. Цвет из состава нельзя удалить (PROTECT)."""
+
+    mix = models.ForeignKey(
+        Color, verbose_name="Составной цвет", on_delete=models.CASCADE, related_name="+"
+    )
+    color = models.ForeignKey(
+        Color, verbose_name="Цвет", on_delete=models.PROTECT, related_name="+"
+    )
+
+    class Meta:
+        verbose_name = "Цвет в составе"
+        verbose_name_plural = "Состав составных цветов"
+        constraints = [
+            models.UniqueConstraint(fields=["mix", "color"], name="catalog_colorcomponent_uniq")
+        ]
+
+    def __str__(self):
+        return f"{self.mix}: {self.color}"
 
 
 class Manufacturer(UniqueNameModel):
