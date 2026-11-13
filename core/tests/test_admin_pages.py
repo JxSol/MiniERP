@@ -3,8 +3,12 @@
 себестоимость ни в списке, ни в карточке товара.
 """
 
+import re
+from pathlib import Path
+
 import pytest
 from django.contrib.auth.models import Group, User
+from django.contrib.staticfiles import finders
 from django.urls import reverse
 
 from core.demo import load_demo
@@ -81,3 +85,19 @@ def test_technologist_sees_cost_but_not_palette_editing(client, demo):
     assert "7 988,66" in page
     assert client.get(reverse("admin:catalog_color_add")).status_code == 403
     assert client.get(reverse("admin:catalog_color_changelist")).status_code == 200
+
+
+def test_pages_use_full_window_width(client, admin_user):
+    """
+    Широкие экраны: тема ограничивает содержимое классом container внутри #main,
+    а core/admin.css снимает это ограничение. Тест упадёт, если тема поменяет разметку.
+    """
+    css = Path(finders.find("core/admin.css")).read_text(encoding="utf-8")
+    assert re.search(r"#main \.container\s*\{\s*max-width:\s*none;", css)
+
+    client.force_login(admin_user)
+    for name in ("admin:catalog_color_changelist", "admin:catalog_color_add"):
+        page = client.get(reverse(name)).content.decode()
+        assert "core/admin.css" in page, name
+        assert 'id="main"' in page, name
+        assert re.search(r'id="content" class="container\b', page), name
