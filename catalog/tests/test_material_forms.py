@@ -196,6 +196,29 @@ def test_material_pages_show_forms(client, admin_user, demo):
     assert f"10{NBSP}лист (3,364{NBSP}м²)" in listing
 
 
+def test_unit_price_is_shown_with_two_decimals(client, admin_user, demo):
+    """Катушка 1000 г за 4 588 ₸: на экране «4,59 ₸/г», а в расчёты идёт точная цена 4,588."""
+    green = Material.objects.get(name="PLA Basic", color__name="Зелёный")
+    offer = green.offers.get()
+    offer.pack_size, offer.pack_price = D(1000), D(4588)
+    offer.save()
+    assert Material.objects.get(pk=green.pk).unit_price == D("4.588")
+
+    client.force_login(admin_user)
+    listing = client.get(reverse("admin:catalog_material_changelist")).content.decode()
+    assert f"4,59{NBSP}₸/г" in listing and "4,588" not in listing
+
+    line = ReceiptLine.objects.create(
+        receipt=Receipt.objects.create(warehouse=Warehouse.objects.create(name="Тестовый")),
+        material=green,
+        supplier=offer.supplier,
+        manufacturer=offer.manufacturer,
+        packs=2,
+        total_price=D(9176),
+    )
+    assert line.summary() == (f"2 уп. × 1{NBSP}кг = 2{NBSP}кг; 9{NBSP}176{NBSP}₸ (4,59{NBSP}₸/г)")
+
+
 def test_material_cipher_normalized_unique_and_searchable(client, admin_user, demo):
     """Шифр: три знака 0–9/A–F, кириллица и строчные приводятся, повтор не сохраняется, поиск работает."""
     from django.urls import reverse

@@ -22,33 +22,61 @@ def can_view_cost(request=None) -> bool:
     return bool(request and request.user.has_perm(COST_PERMISSION))
 
 
+NBSP = "\u00a0"  # неразрывный пробел: между разрядами числа и перед единицей
+
+# Мельче этого тенге не показываются: суммы точнее не хранятся
+SMALLEST_MONEY = Decimal("0.0001")
+
+
+def round_money(value: Decimal, digits: int = 2) -> Decimal:
+    """
+    Округление тенге для показа: до digits знаков после запятой (обычно два — тиыны).
+    Сумма меньше последнего показываемого знака округляется до первой значащей цифры,
+    чтобы не превратиться в ноль: 0.0037 → 0.004, 0.00012 → 0.0001.
+    """
+    value = Decimal(value)
+    unit = Decimal(1).scaleb(-digits)
+    if not 0 < value < unit:
+        return value.quantize(unit, rounding=ROUND_HALF_UP)
+    step = max(Decimal(1).scaleb(value.adjusted()), SMALLEST_MONEY)
+    return value.quantize(step, rounding=ROUND_HALF_UP).normalize()
+
+
+def _tenge(rounded: Decimal, digits: int) -> str:
+    """Уже округлённое число → «7 988,66 ₸»: разряды через неразрывный пробел."""
+    text = f"{rounded:,.{digits}f}".replace(",", NBSP).replace(".", ",")
+    return f"{text}{NBSP}₸"
+
+
+TOO_SMALL = f"<{NBSP}{_tenge(SMALLEST_MONEY, 4)}"  # «< 0,0001 ₸»: мало, но не бесплатно
+
+
 def fmt_money(value: Decimal | None, digits: int = 2) -> str:
-    """7988.6634 → «7 988,66 ₸» (неразрывные пробелы между разрядами)."""
+    """
+    Сумма в тенге: 7988.6634 → «7 988,66 ₸», всегда с digits знаками после запятой.
+    Меньше одного тиына — до первой значащей цифры: «0,004 ₸» (см. round_money).
+    """
     if value is None:
         return "—"
     value = Decimal(value)
-    unit = Decimal(1).scaleb(-digits)
-    quantized = value.quantize(unit, rounding=ROUND_HALF_UP)
-    if quantized == 0 and value > 0:
-        return "< " + fmt_money(unit, digits)  # «< 0,01 ₸»: мало, но не бесплатно
-    if quantized == 0:
-        quantized = Decimal(0).quantize(unit)  # без «−0,00»
-    text = f"{quantized:,.{digits}f}".replace(",", " ").replace(".", ",")
-    return f"{text} ₸"
+    rounded = round_money(value, digits)
+    if rounded == 0:
+        return TOO_SMALL if value > 0 else _tenge(Decimal(0), digits)  # без «−0,00»
+    return _tenge(rounded, max(digits, -rounded.as_tuple().exponent))
 
 
 def fmt_price(value: Decimal | None) -> str:
-    """Цена за единицу: без лишних нулей — «15 ₸», «9 ₸», «0,0375 ₸» (до 4 знаков)."""
+    """
+    Цена за единицу: округляется как сумма, не больше двух знаков после запятой,
+    но без лишних нулей — «15 ₸», «4,5 ₸», «4,59 ₸»; меньше тиына — «0,004 ₸».
+    """
     if value is None:
         return "—"
-    quantized = Decimal(value).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-    if quantized == 0 and Decimal(value) > 0:
-        return "< " + fmt_money(Decimal("0.0001"), 4)
-    text = f"{quantized:f}"
-    if "." in text:
-        text = text.rstrip("0").rstrip(".")
-    digits = len(text.split(".")[1]) if "." in text else 0
-    return fmt_money(quantized, digits)
+    value = Decimal(value)
+    rounded = round_money(value).normalize()
+    if rounded == 0:
+        return TOO_SMALL if value > 0 else _tenge(Decimal(0), 0)
+    return _tenge(rounded, max(0, -rounded.as_tuple().exponent))
 
 
 def fmt_quantity(value: Decimal | None, unit: str = "шт") -> str:
@@ -63,7 +91,7 @@ def fmt_quantity(value: Decimal | None, unit: str = "шт") -> str:
         value, unit = (value / 1000).quantize(Decimal("0.001")), "кг"
     elif unit == "мл" and abs(value) >= 1000:
         value, unit = (value / 1000).quantize(Decimal("0.001")), "л"
-    return f"{fmt_number(value)} {unit}"
+    return f"{fmt_number(value)}{NBSP}{unit}"
 
 
 def fmt_duration(minutes: Decimal | None) -> str:
@@ -86,11 +114,11 @@ def fmt_number(value: Decimal | None) -> str:
         return "—"
     quantized = Decimal(value).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
     if quantized == 0 and Decimal(value) > 0:
-        return "< 0,0001"
+        return f"<{NBSP}0,0001"
     if quantized == 0:
         quantized = Decimal(0)
     text = f"{quantized.normalize():,f}"
-    return text.replace(",", " ").replace(".", ",")
+    return text.replace(",", NBSP).replace(".", ",")
 
 
 def color_swatch(color, title: str | None = None) -> str:
@@ -230,8 +258,9 @@ def render_cost_tree(node, *, footer: list[tuple[str, Decimal]] | None = None) -
         '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;'
         'font-size:13px">{}<tbody>{}{}</tbody></table>'
         '<p style="opacity:.6;font-size:12px;margin-top:6px">У строк с количеством вложенные '
-        "строки раскрывают стоимость одной единицы. Суммы считаются точно и округляются только "
-        "при показе.</p></div>",
+        "строки раскрывают стоимость одной единицы. Цены и суммы считаются точно и округляются "
+        "только при показе, поэтому «количество × цена» может на несколько тиынов отличаться "
+        "от суммы в строке.</p></div>",
         header,
         mark_safe("".join(_rows(node, 0))),
         footer_html,

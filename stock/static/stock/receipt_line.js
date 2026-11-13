@@ -10,6 +10,20 @@ document.addEventListener("DOMContentLoaded", function () {
         return Number(n).toLocaleString("ru-RU", { maximumFractionDigits: digits === undefined ? 4 : digits });
     }
 
+    // Цена в тенге — по тому же правилу, что fmt_price на сервере: не больше двух знаков после
+    // запятой; меньше одного тиына (0,01) — до первой значащей цифры, но не мельче 0,0001
+    function fmtPrice(n) {
+        if (n === null || n === undefined || isNaN(n)) return "";
+        var digits = 2;
+        if (n > 0 && n < 0.01) digits = Math.min(4, -Math.floor(Math.log10(n)));
+        var scale = Math.pow(10, digits);
+        // множитель чуть больше единицы: ровно половина округляется вверх, как на сервере
+        // (без него 4,585 в двоичном виде чуть меньше и дало бы 4,58)
+        var rounded = Math.round(n * scale * (1 + 1e-9)) / scale;
+        if (rounded === 0 && n > 0) return "< 0,0001";
+        return fmt(rounded, digits);
+    }
+
     function qtyText(qty, unit) {
         if (unit === "г" && Math.abs(qty) >= 1000) return fmt(qty / 1000, 3) + " кг";
         if (unit === "мл" && Math.abs(qty) >= 1000) return fmt(qty / 1000, 3) + " л";
@@ -112,8 +126,8 @@ document.addEventListener("DOMContentLoaded", function () {
         var totalValue = parseFloat(total.val());
         if (totalValue > 0) {
             var perUnit = totalValue / qty;
-            parts.push(fmt(perUnit, 4) + " ₸/" + info.unit);
-            if (info.alt_unit && info.alt_factor) parts.push(fmt(perUnit / parseFloat(info.alt_factor), 4) + " ₸/" + info.alt_unit);
+            parts.push(fmtPrice(perUnit) + " ₸/" + info.unit);
+            if (info.alt_unit && info.alt_factor) parts.push(fmtPrice(perUnit / parseFloat(info.alt_factor)) + " ₸/" + info.alt_unit);
         }
         cell.text(parts.join(" · "));
     }

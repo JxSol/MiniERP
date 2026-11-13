@@ -52,11 +52,58 @@ def test_fmt_duration():
     assert fmt_duration(D("12.5")) == "12,5 мин"
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (D("7988.6634"), f"7{NBSP}988,66{NBSP}₸"),
+        (D("90"), f"90,00{NBSP}₸"),  # сумма всегда с тиынами
+        (D("4.585"), f"4,59{NBSP}₸"),  # ровно половина — вверх
+        (D("0.01"), f"0,01{NBSP}₸"),
+        # меньше одного тиына — до первой значащей цифры, чтобы сумма не стала нулём
+        (D("0.004"), f"0,004{NBSP}₸"),
+        (D("0.0096"), f"0,01{NBSP}₸"),
+        (D("0.0003"), f"0,0003{NBSP}₸"),
+        (D("0.00004"), f"<{NBSP}0,0001{NBSP}₸"),  # мельче 0,0001 не показываем
+        (D("0"), f"0,00{NBSP}₸"),
+        (D("-0.001"), f"0,00{NBSP}₸"),  # без «−0,00»
+        (D("-12.345"), f"-12,35{NBSP}₸"),
+        (None, "—"),
+    ],
+)
+def test_fmt_money(value, expected):
+    assert fmt_money(value) == expected
+
+
+def test_fmt_money_whole_tenge():
+    assert fmt_money(D("35652"), 0) == f"35{NBSP}652{NBSP}₸"
+    assert fmt_money(D("4588.50"), 0) == f"4{NBSP}589{NBSP}₸"
+    assert fmt_money(D("0.4"), 0) == f"0,4{NBSP}₸"  # меньше тенге — не «0 ₸»
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (D("4.588"), f"4,59{NBSP}₸"),  # катушка 1000 г за 4 588 ₸: не больше двух знаков
+        (D("4.5000"), f"4,5{NBSP}₸"),  # без лишних нулей
+        (D("15"), f"15{NBSP}₸"),
+        (D("4588.00"), f"4{NBSP}588{NBSP}₸"),
+        (D("178.3591"), f"178,36{NBSP}₸"),
+        (D("0.0375"), f"0,04{NBSP}₸"),
+        # меньше одного тиына — до первой значащей цифры
+        (D("0.005"), f"0,005{NBSP}₸"),
+        (D("0.0037"), f"0,004{NBSP}₸"),
+        (D("0.00096"), f"0,001{NBSP}₸"),
+        (D("0.0001"), f"0,0001{NBSP}₸"),
+        (D("0.00001"), f"<{NBSP}0,0001{NBSP}₸"),
+        (D("0"), f"0{NBSP}₸"),
+        (None, "—"),
+    ],
+)
+def test_fmt_price(value, expected):
+    assert fmt_price(value) == expected
+
+
 def test_tiny_and_zero_values():
-    assert fmt_money(D("0.004")) == f"<{NBSP}0,01{NBSP}₸"
-    assert fmt_money(D("-0.001")) == f"0,00{NBSP}₸"
-    assert fmt_price(D("0.00001")) == f"<{NBSP}0,0001{NBSP}₸"
-    assert fmt_price(D("0.0375")) == f"0,0375{NBSP}₸"
     assert fmt_number(D("1000.0000")) == f"1{NBSP}000"
     assert fmt_number(D("0.00004")) == f"<{NBSP}0,0001"
     assert fmt_quantity(D("33.33333333333333333"), "г") == f"33,3333{NBSP}г"
