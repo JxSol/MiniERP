@@ -297,7 +297,9 @@ class CostSnapshot(models.Model):
         ordering = ["-created_at"]
 
     def __str__(self):
-        return f"{self.product.sku} от {self.created_at:%d.%m.%Y %H:%M}"
+        from core.admin_utils import fmt_datetime
+
+        return f"{self.product.sku} от {fmt_datetime(self.created_at)}"
 
     def save(self, *args, **kwargs):
         if self.pk:

@@ -272,8 +272,11 @@ class StockMove(StockItemMixin):
         ]
 
     def __str__(self):
+        from core.admin_utils import fmt_date
+
         sign = "+" if self.quantity > 0 else "−"
-        return f"{self.date:%d.%m.%Y} {self.item_label}: {sign}{self.format_quantity(abs(self.quantity))}"
+        quantity = self.format_quantity(abs(self.quantity))
+        return f"{fmt_date(self.date)} {self.item_label}: {sign}{quantity}"
 
 
 class StockBalance(StockItemMixin):

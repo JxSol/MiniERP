@@ -4,7 +4,8 @@ from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin.options import IS_POPUP_VAR
 from django.core.exceptions import ValidationError
-from django.db.models import Count
+from django.db.models import CharField, Count, Value
+from django.db.models.functions import Concat
 from django.forms.models import BaseInlineFormSet
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
@@ -39,6 +40,7 @@ from core.admin_utils import (
 )
 from core.forms import ActiveChoicesForm, QuantityUnitFormMixin
 from core.models import Size
+from core.search import SearchMixin
 from core.widgets import DurationMinutesField
 from costing.services import model_tree, part_tree, variant_tree
 from gallery.admin import ModelPhotoInline, PartPhotoInline, PhotoUploaderMixin, VariantPhotoInline
@@ -837,6 +839,8 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
     list_display_links = ("photo", "swatches", "name")
     list_filter = ("coloring", "model")
     search_fields = ("name", "code", "model__name", "model__code")
+    # полный код «M-0000001_01» собирается из кода модели и номера варианта
+    search_expressions = (Concat("model__code", Value("_"), "code", output_field=CharField()),)
     autocomplete_fields = ("model",)
     inlines = (VariantSlotInline, VariantPhotoInline)
     readonly_fields = ("full_code", "main_photo_display", "product_display", "cost_tree")
@@ -930,7 +934,7 @@ class VariantAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
 
 
 @admin.register(PartColoring)
-class PartColoringAdmin(PageHelpMixin, ModelAdmin):
+class PartColoringAdmin(PageHelpMixin, SearchMixin, ModelAdmin):
     """Ведёт система: нужен для выбора детали с её материалами в документах склада."""
 
     list_display = ("part", "label")

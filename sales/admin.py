@@ -9,6 +9,7 @@ from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
 from core.admin_utils import (
     COST_PERMISSION,
     CostVisibilityMixin,
+    fmt_date,
     fmt_money,
     fmt_number,
     hx_redirect,
@@ -198,9 +199,9 @@ class ProductAdmin(PhotoUploaderMixin, CostVisibilityMixin, HistoryAdmin, Archiv
             return "Не фиксировалась"
         who = f", {snapshot.created_by}" if snapshot.created_by else ""
         return format_html(
-            "{} <span style='opacity:.6'>({:%d.%m.%Y}{})</span>",
+            "{} <span style='opacity:.6'>({}{})</span>",
             fmt_money(snapshot.total),
-            snapshot.created_at,
+            fmt_date(snapshot.created_at),
             who,
         )
 

@@ -4,10 +4,12 @@
 """
 
 from contextvars import ContextVar
+from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
 from django.http import HttpResponse
 from django.shortcuts import redirect
+from django.utils import timezone
 from django.utils.html import format_html, format_html_join, mark_safe
 
 COST_PERMISSION = "sales.view_cost"
@@ -119,6 +121,27 @@ def fmt_number(value: Decimal | None) -> str:
         quantized = Decimal(0)
     text = f"{quantized.normalize():,f}"
     return text.replace(",", NBSP).replace(".", ",")
+
+
+def _local(value: date | datetime) -> date | datetime:
+    """Дата-время хранится в базе в UTC — переводим во время из настроек (Алматы, UTC+5)."""
+    if isinstance(value, datetime) and timezone.is_aware(value):
+        return timezone.localtime(value)
+    return value
+
+
+def fmt_date(value: date | datetime | None) -> str:
+    """
+    Дата «14.11.2026» по местному времени. Все даты в тексте выводятся только этой функцией:
+    если взять дату прямо из времени базы, запись, сделанная с полуночи до пяти утра,
+    покажется вчерашним числом.
+    """
+    return "—" if value is None else f"{_local(value):%d.%m.%Y}"
+
+
+def fmt_datetime(value: datetime | None) -> str:
+    """Дата и время «14.11.2026 03:26» по местному времени."""
+    return "—" if value is None else f"{_local(value):%d.%m.%Y %H:%M}"
 
 
 def color_swatch(color, title: str | None = None) -> str:

@@ -856,11 +856,11 @@ class MaterialPriceHistory(models.Model):
         ordering = ["-changed_at"]
 
     def __str__(self):
-        from core.admin_utils import fmt_price
+        from core.admin_utils import fmt_date, fmt_price
 
         return (
             f"{self.material}: {self.material.format_qty(self.pack_size)} за "
-            f"{fmt_price(self.pack_price)} от {self.changed_at:%d.%m.%Y}"
+            f"{fmt_price(self.pack_price)} от {fmt_date(self.changed_at)}"
         )
 
     def save(self, *args, **kwargs):

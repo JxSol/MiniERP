@@ -27,6 +27,7 @@ from catalog.models import Material, MaterialForm, Unit
 from core.admin import ArchiveAdmin, HistoryAdmin, LineInline
 from core.admin_utils import (
     PageHelpMixin,
+    fmt_date,
     fmt_duration,
     fmt_money,
     fmt_number,
@@ -34,6 +35,7 @@ from core.admin_utils import (
     hx_redirect,
 )
 from core.forms import ActiveChoicesForm, QuantityUnitFormMixin
+from core.search import SearchMixin
 from core.widgets import DurationMinutesField
 from production.models import Part, PartMaterial
 
@@ -298,7 +300,12 @@ class ReceiptAdmin(DocumentAdmin):
         "status_badge",
         "created_by",
     )
-    search_fields = ("number", "lines__material__name", "lines__supplier__name")
+    search_fields = (
+        "number",
+        "lines__material__name",
+        "lines__material__color__name",
+        "lines__supplier__name",
+    )
     inlines = (ReceiptLineInline,)
     fields = ("number", "date", "warehouse", "status_display", "notes", "created_by", "posted_at")
 
@@ -519,7 +526,12 @@ class ProductionRunAdmin(DocumentAdmin):
         "status_badge",
     )
     list_filter = ("status", "warehouse", "equipment", "part")
-    search_fields = ("number", "part__name", "materials__material__name")
+    search_fields = (
+        "number",
+        "part__name",
+        "materials__material__name",
+        "materials__material__color__name",
+    )
     autocomplete_fields = ("part", "equipment")
     actions_detail = ("cancel_document", "make_norm")
     readonly_fields = (*DocumentAdmin.readonly_fields, "norm_display", "cost_display")
@@ -826,6 +838,7 @@ class AdjustmentAdmin(DocumentAdmin):
     search_fields = (
         "number",
         "lines__material__name",
+        "lines__material__color__name",
         "lines__part__name",
         "lines__part_coloring__label",
         "lines__variant__name",
@@ -916,7 +929,7 @@ class LowStockFilter(SimpleListFilter):
         return queryset.filter(material_id__in=low_ids)
 
 
-class ReadOnlyAdmin(PageHelpMixin, ModelAdmin):
+class ReadOnlyAdmin(PageHelpMixin, SearchMixin, ModelAdmin):
     """Остатки и движения считаются системой: только просмотр, без форм редактирования."""
 
     def has_add_permission(self, request):
@@ -1058,7 +1071,7 @@ class StockBalanceAdmin(ReadOnlyAdmin):
             "<td style='padding:4px 0;text-align:right'>{}</td></tr>",
             (
                 (
-                    move.date.strftime("%d.%m.%Y"),
+                    fmt_date(move.date),
                     _doc_link(move),
                     ("+" if move.quantity > 0 else "−") + obj.format_quantity(abs(move.quantity)),
                 )
@@ -1123,6 +1136,7 @@ class StockMoveAdmin(ReadOnlyAdmin):
     list_filter = (KindFilter, "warehouse", "date")
     search_fields = (
         "material__name",
+        "material__color__name",
         "part__name",
         "part_coloring__label",
         "variant__name",

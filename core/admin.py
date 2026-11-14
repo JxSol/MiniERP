@@ -20,6 +20,7 @@ from .admin_utils import PageHelpMixin
 from .forms import ActiveChoicesForm
 from .models import SiteSettings, Size, Tag
 from .roles import ROLE_DESCRIPTIONS, role_description
+from .search import SearchMixin
 
 
 def number_step(db_field) -> str | None:
@@ -58,7 +59,7 @@ class NumberStepsMixin:
         return formfield
 
 
-class HistoryAdmin(NumberStepsMixin, SimpleHistoryAdmin):
+class HistoryAdmin(NumberStepsMixin, SearchMixin, SimpleHistoryAdmin):
     """
     История изменений. simple_history разрешает POST на странице версии любому,
     у кого есть право просмотра, — закрываем это: менять запись может только тот,
@@ -71,7 +72,7 @@ class HistoryAdmin(NumberStepsMixin, SimpleHistoryAdmin):
         return super().history_form_view(request, object_id, version_id, extra_context)
 
 
-class ArchiveAdmin(NumberStepsMixin, PageHelpMixin, ModelAdmin):
+class ArchiveAdmin(NumberStepsMixin, PageHelpMixin, SearchMixin, ModelAdmin):
     """
     Общие настройки: архивные записи видны через фильтр «Активно», не предлагаются
     в выпадающих списках и автокомплите, но у существующих записей остаются допустимыми.
@@ -175,7 +176,7 @@ def roles_summary() -> str:
 
 
 @admin.register(User)
-class UserAdmin(PageHelpMixin, BaseUserAdmin, ModelAdmin):
+class UserAdmin(PageHelpMixin, SearchMixin, BaseUserAdmin, ModelAdmin):
     form = UserChangeForm
     add_form = UserCreationForm
     change_password_form = AdminPasswordChangeForm
@@ -190,7 +191,7 @@ class UserAdmin(PageHelpMixin, BaseUserAdmin, ModelAdmin):
 
 
 @admin.register(Group)
-class GroupAdmin(PageHelpMixin, BaseGroupAdmin, ModelAdmin):
+class GroupAdmin(PageHelpMixin, SearchMixin, BaseGroupAdmin, ModelAdmin):
     list_display = ("name", "description_display")
     readonly_fields = ("description_display",)
     fields = ("name", "description_display", "permissions")
