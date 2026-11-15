@@ -1,6 +1,7 @@
 """
 Поиск в списках и выпадающих списках: без учёта регистра, «е/ё» и знаков препинания,
-слова в любом порядке. Один и тот же поиск у всех разделов.
+слова в любом порядке, запрос можно набрать не в той раскладке. Один и тот же поиск
+у всех разделов.
 """
 
 import pytest
@@ -9,7 +10,7 @@ from django.urls import reverse
 
 from catalog.models import Material, MaterialCategory, Unit
 from core.demo import load_demo
-from core.search import SearchMixin, fold, loose_words, search_words
+from core.search import SearchMixin, attempts, fold, loose_words, retyped, search_words
 from costing.services import recalculate_all
 from production.models import Variant
 
@@ -93,6 +94,104 @@ def test_punctuation_inside_names_and_codes(client, admin_user, demo):
     # слова через дефис без пробелов: сначала ищется слитно, потом как два слова
     assert found(client, "луна-белый", "production_variant") == ["Светильник Луна — Белый"]
     assert found(client, "pla-basic,белый") == ["PLA Basic, белый"]
+
+
+def test_other_layout_readings():
+    """Слово читается и как набрано, и так, как его набрали бы в другой раскладке."""
+    assert retyped(",tksq") == ["белый"]
+    assert retyped("<TKSQ") == ["белый"]  # заглавная «Б» — это Shift и клавиша «,»
+    assert retyped("x`hysq") == ["чёрный"]
+    assert retyped("зуеп") == ["petg"]
+    assert retyped("Ь-0000001_01") == ["m-0000001_01"]
+    assert retyped("2026") == []  # цифры в обеих раскладках одни и те же
+    # вся таблица: три ряда клавиш и «ё»
+    russian = "йцукенгшщзхъ фывапролджэ ячсмитьбю ё"
+    english = "qwertyuiop[] asdfghjkl;' zxcvbnm,. `"
+    assert retyped(russian) == [english] and retyped(english) == [russian]
+
+    # способы прочитать запрос: сначала как набрано, потом с другой раскладкой
+    assert attempts("pla") == [[[("pla",)]], [[("pla",), ("здф",)]]]
+    assert attempts("pla ,tksq")[1] == [[("pla",), ("здф",)], [("tksq",), ("белый",)]]
+    # слово короче трёх знаков в другой раскладке не угадывается: «шт» — это не «in»
+    assert attempts("шт") == [[[("шт",)]]]
+    assert attempts("2026") == [[[("2026",)]]]
+    assert attempts(" , - ") == []
+    # знаки внутри слова: четыре способа, от точного к вольному
+    assert attempts("луна-белый") == [
+        [[("лунабелый",)]],
+        [[("лунабелый",), ("keyftksq",)]],
+        [[("луна", "белый")]],
+        [[("луна", "белый"), ("keyf", "tksq")]],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("term", "expected"),
+    [
+        (",tksq pla basic", "PLA Basic, белый"),  # «белый» в английской раскладке
+        ("PLA BASIC <TKSQ", "PLA Basic, белый"),  # то же заглавными
+        ("pla basic, ,tksq", "PLA Basic, белый"),  # с запятой, как написано в списке
+        ("здф ифышс белый", "PLA Basic, белый"),  # «pla basic» в русской раскладке
+        ("здф-ифышс белый", "PLA Basic, белый"),  # и через дефис
+        ("basic x`hysq", "PLA Basic, чёрный"),  # «чёрный» через «ё»
+        ("basic xthysq", "PLA Basic, чёрный"),  # и через «е»
+        ("gktyrf egfrjdjxyfz", "Плёнка упаковочная 58×58 см"),  # весь запрос не в той раскладке
+    ],
+)
+def test_wrong_keyboard_layout(client, admin_user, demo, term, expected):
+    client.force_login(admin_user)
+    assert found(client, term) == [expected]
+
+
+def test_wrong_layout_in_codes_dropdowns_and_global_search(client, admin_user, demo):
+    client.force_login(admin_user)
+    # код варианта русскими буквами находит только свой вариант, как и набранный верно
+    variant = Variant.objects.filter(model__name="Светильник Луна").order_by("code").first()
+    assert variant.full_code.startswith("M-")
+    typed = variant.full_code.replace("M", "Ь")
+    assert found(client, typed, "production_variant") == [str(variant)]
+    # «луна-белый» в английской раскладке: слова через дефис без пробелов
+    assert found(client, "keyf-,tksq", "production_variant") == ["Светильник Луна — Белый"]
+    # русская «х» между цифрами: она на клавише «[», а знаков для поиска нет
+    assert found(client, "коробка 20х20х25") == ["Коробка 20×20×25"]
+
+    # выпадающий список материала в строке закупки
+    params = {"app_label": "stock", "model_name": "receiptline", "field_name": "material"}
+    response = client.get(reverse("admin:autocomplete"), {**params, "term": ",tksq pla basic"})
+    assert [item["text"] for item in response.json()["results"]] == ["PLA Basic, белый"]
+
+    # общий поиск по всем разделам (Ctrl+K)
+    response = client.get(reverse("admin:search"), {"s": "basic ,tksq"})
+    assert response.status_code == 200
+    assert "PLA Basic, белый" in response.content.decode()
+
+
+def test_layout_is_guessed_only_when_nothing_is_found_as_typed(client, admin_user, demo):
+    """Другая раскладка — запасной способ: найденное как набрано ею не разбавляется."""
+    client.force_login(admin_user)
+    category = MaterialCategory.objects.get(name="Электрика")
+    for name in ("Здф", "Inox"):
+        material = Material(name=name, category=category, unit=Unit.METER)
+        material.full_clean(exclude=["name_key"])
+        material.save()
+    assert found(client, "здф") == ["Здф"]  # а не материалы PLA
+    assert "Здф" not in found(client, "pla")
+    # «штщч» — это «inox», а «шт» слишком коротко, чтобы читать его как «in»
+    assert found(client, "штщч") == ["Inox"]
+    assert "Inox" not in found(client, "шт")
+
+    # выпадающий список архивных не предлагает, поэтому и поиску они не мешают: когда «Здф»
+    # в архиве, «здф» там читается как «pla»
+    def dropdown(term):
+        params = {"app_label": "stock", "model_name": "receiptline", "field_name": "material"}
+        response = client.get(reverse("admin:autocomplete"), {**params, "term": term})
+        return sorted(item["text"] for item in response.json()["results"])
+
+    assert dropdown("здф") == ["Здф"]
+    archived = Material.objects.get(name="Здф")
+    archived.is_active = False
+    archived.save()
+    assert dropdown("здф") == dropdown("pla") != []
 
 
 def test_documents_are_found_by_material_with_color(client, admin_user, demo):

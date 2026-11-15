@@ -7,17 +7,26 @@
 полей поиска. И слова, и текст в базе перед сравнением приводятся к одному виду (fold):
 строчные буквы, «ё» как «е», без знаков препинания.
 
-Знаки внутри слова сначала просто убираются: код «M-0000001_01» ищется как «m000000101»
-и находит только свою запись. Если так не нашлось ничего, знаки считаются пробелами:
-«луна-белый» находит «Светильник Луна — Белый».
+Запрос читается четырьмя способами, от точного к вольному (attempts); в ответ идёт первый,
+по которому что-то нашлось:
+1. Как набрано, знаки внутри слова убраны: код «M-0000001_01» ищется как «m000000101»
+   и находит только свою запись.
+2. То же, но любое слово может быть набрано не в той раскладке: «,tksq» — это «белый»,
+   «зуеп» — это «petg».
+3. Как набрано, знаки внутри слова считаются пробелами: «луна-белый» находит
+   «Светильник Луна — Белый».
+4. То же с другой раскладкой.
 """
+
+from functools import reduce
+from operator import and_, or_
 
 from django.contrib.admin.utils import lookup_spawns_duplicates
 from django.db.models import F, Func, Q, TextField, Value
 from django.db.models.functions import Cast, Lower
 from django.db.models.lookups import Contains
 
-NBSP = " "
+NBSP = "\u00a0"  # неразрывный пробел
 
 # Знаки, которых для поиска нет
 PUNCTUATION = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~«»„“”‘’…–—×·•№"
@@ -28,6 +37,20 @@ _TO_SPACES = str.maketrans({"ё": "е", NBSP: " ", **dict.fromkeys(PUNCTUATION, 
 # То же для базы: TRANSLATE заменяет «ё» и неразрывный пробел, остальные знаки удаляет
 _SQL_FROM = "ё" + NBSP + PUNCTUATION
 _SQL_TO = "е" + " "
+
+# Клавиши английской раскладки и буквы, которые те же клавиши дают в русской. В конце —
+# семь клавиш с Shift: в английской раскладке это другой знак («<» — заглавная «Б»)
+_ENGLISH_KEYS = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`" + '{}:"<>~'
+_RUSSIAN_KEYS = "йцукенгшщзхъфывапролджэячсмитьбюё" + "хъжэбюё"
+_TO_RUSSIAN = str.maketrans(_ENGLISH_KEYS, _RUSSIAN_KEYS)
+_TO_ENGLISH = str.maketrans(_RUSSIAN_KEYS[:33], _ENGLISH_KEYS[:33])
+
+# Слово в другой раскладке короче трёх знаков не угадывается: иначе «шт» — это ещё и «in»,
+# и по нему нашлось бы всё, где есть эти две буквы
+MIN_RETYPED = 3
+
+Reading = tuple[str, ...]  # прочтение слова запроса: части, которые должны найтись все
+Attempt = list[list[Reading]]  # способ прочитать запрос: у каждого слова свои прочтения
 
 
 def fold(text: str) -> str:
@@ -57,28 +80,67 @@ def folded(source) -> Func:
     )
 
 
-def words_condition(sources, words: list[str]) -> Q:
-    """Каждое слово нашлось хотя бы в одном из полей."""
+def retyped(word: str) -> list[str]:
+    """Слово, как если бы его набирали в другой раскладке: «,tksq» → ["белый"]."""
+    word = word.lower()
+    others = (word.translate(_TO_RUSSIAN), word.translate(_TO_ENGLISH))
+    return [other for other in others if other != word]
+
+
+def _readings(word: str, split, other_layout: bool) -> list[Reading]:
+    """Прочтения одного слова: как набрано и, если просили, в другой раскладке."""
+    readings = [tuple(split(word))]
+    if other_layout:
+        guesses = (tuple(split(other)) for other in retyped(word))
+        readings += [guess for guess in guesses if sum(map(len, guess)) >= MIN_RETYPED]
+    return [reading for reading in dict.fromkeys(readings) if reading]
+
+
+def attempts(term: str) -> list[Attempt]:
+    """Способы прочитать запрос, от точного к вольному; одинаковые не повторяются."""
+    words = (term or "").lower().split()
+    result = []
+    for split, other_layout in (
+        (search_words, False),
+        (search_words, True),
+        (loose_words, False),
+        (loose_words, True),
+    ):
+        attempt = [found for word in words if (found := _readings(word, split, other_layout))]
+        if attempt and attempt not in result:
+            result.append(attempt)
+    return result
+
+
+def condition(sources, attempt: Attempt) -> Q:
+    """Каждое слово запроса нашлось: в любом своём прочтении, все его части, в любом поле."""
     texts = [folded(source) for source in sources]
-    condition = Q()
-    for word in words:
-        in_any_field = Q()
-        for text in texts:
-            in_any_field |= Q(Contains(text, word))
-        condition &= in_any_field
-    return condition
+
+    def every(conditions) -> Q:
+        return reduce(and_, conditions, Q())
+
+    def some(conditions) -> Q:
+        return reduce(or_, conditions, Q())
+
+    return every(
+        some(
+            every(some(Q(Contains(text, part)) for text in texts) for part in reading)
+            for reading in readings
+        )
+        for readings in attempt
+    )
 
 
 def search(queryset, sources, term: str):
     """Записи, подходящие под запрос; None — в запросе нет ни одного слова (искать нечего)."""
-    words = search_words(term)
-    if not words or not sources:
+    if not search_words(term) or not sources:
         return None
-    result = queryset.filter(words_condition(sources, words))
-    loose = loose_words(term)
-    if loose != words and not result.exists():
-        result = queryset.filter(words_condition(sources, loose))
-    return result
+    *earlier, last = attempts(term)
+    for attempt in earlier:
+        result = queryset.filter(condition(sources, attempt))
+        if result.exists():
+            return result
+    return queryset.filter(condition(sources, last))
 
 
 class SearchMixin:

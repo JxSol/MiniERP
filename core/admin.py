@@ -83,13 +83,14 @@ class ArchiveAdmin(NumberStepsMixin, PageHelpMixin, SearchMixin, ModelAdmin):
     warn_unsaved_form = True
 
     def get_search_results(self, request, queryset, search_term):
-        queryset, distinct = super().get_search_results(request, queryset, search_term)
         is_autocomplete = (
             request.resolver_match and request.resolver_match.url_name == "autocomplete"
         )
+        # Архивные убираются до поиска: если как набрано нашлись только они, поиск пробует
+        # прочитать запрос иначе (другая раскладка, знаки как пробелы)
         if is_autocomplete and hasattr(self.model, "is_active"):
             queryset = queryset.filter(is_active=True)
-        return queryset, distinct
+        return super().get_search_results(request, queryset, search_term)
 
     def get_list_filter(self, request):
         filters = list(super().get_list_filter(request))
