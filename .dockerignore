@@ -1,0 +1,16 @@
+# В образ не попадают: секреты, загруженные фото, копии базы, окружение разработчика
+.env
+.git
+.github
+.venv
+.claude
+.pytest_cache
+.ruff_cache
+**/__pycache__
+*.py[cod]
+/media
+/backup
+/staticfiles
+*.log
+Dockerfile
+docker-compose*.yml

@@ -72,6 +72,10 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "simple_history.middleware.HistoryRequestMiddleware",
 ]
+if not DEBUG:
+    # На сервере статику (оформление админки, скрипты) отдаёт само приложение через WhiteNoise:
+    # сжатой и с заголовками кеширования. При DEBUG=True это делает runserver
+    MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
 
 ROOT_URLCONF = "config.urls"
 
@@ -123,10 +127,40 @@ FORMS_URLFIELD_ASSUME_HTTPS = True
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
+# Фото и файлы моделей отдаёт core.media: только вошедшим сотрудникам
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"
+        if DEBUG
+        else "whitenoise.storage.CompressedStaticFilesStorage"
+    },
+}
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+# Журнал. На сервере ошибки пишутся в вывод контейнера (docker compose logs web): без этого
+# Django при DEBUG=False только пытается отправить их письмом администраторам
+
+if not DEBUG:
+    LOGGING = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "plain": {"format": "%(asctime)s %(levelname)s %(name)s: %(message)s"},
+        },
+        "handlers": {
+            "console": {"class": "logging.StreamHandler", "formatter": "plain"},
+        },
+        "root": {"handlers": ["console"], "level": "WARNING"},
+        "loggers": {
+            "django": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        },
+    }
 
 
 # Оформление админки

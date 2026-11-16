@@ -30,7 +30,7 @@
 ## Стек
 
 Python 3.13, Django 5.2, PostgreSQL 16 (в Docker), админка на django-unfold, история
-изменений django-simple-history. Зависимости описаны в `pyproject.toml` и закреплены
+изменений django-simple-history. На сервере приложение тоже работает в Docker, под waitress. Зависимости описаны в `pyproject.toml` и закреплены
 в `uv.lock` (менеджер [uv](https://docs.astral.sh/uv/)); `requirements.txt`
 и `requirements-dev.txt` — экспорт из lock-файла для установки через pip там, где uv нет.
 
@@ -70,8 +70,8 @@ uv run manage.py runserver
 `uv export --no-hashes --no-dev -o requirements.txt` и
 `uv export --no-hashes -o requirements-dev.txt`.
 
-Админка: http://127.0.0.1:8000/admin/. В `DEBUG=True` Django сам отдаёт загруженные фото
-из папки `media/`.
+Админка: http://127.0.0.1:8000/admin/. Фото и файлы моделей из папки `media/` открываются
+только вошедшим пользователям — и при разработке, и на сервере.
 
 **Запуск двойным щелчком.** После первой настройки (шаги 0–4) сервер запускается файлом
 `Запустить сервер.bat` в папке проекта: он запускает Docker Desktop, если тот не работает,
@@ -90,112 +90,110 @@ uv run manage.py runserver
 | Переменная | Для чего | Разработка | Прод |
 |---|---|---|---|
 | `SECRET_KEY` | ключ подписи сессий и форм | любой | случайная строка от 40 символов, иначе приложение не стартует |
-| `DEBUG` | подробные ошибки, отдача медиа Django | `True` | `False` |
+| `DEBUG` | подробные ошибки на странице | `True` | `False` |
 | `ALLOWED_HOSTS` | домены, с которых принимаются запросы | `localhost,127.0.0.1` | `erp.example.kz` |
 | `CSRF_TRUSTED_ORIGINS` | адреса с протоколом для форм за HTTPS | пусто | `https://erp.example.kz` |
 | `DATABASE_URL` | подключение к PostgreSQL | `postgres://erp:erp@localhost:5432/erp` | то же, но с надёжным паролем |
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_PORT` | параметры контейнера базы | как в образце | пароль поменять, порт можно закрыть |
 | `SECURE_SSL_REDIRECT` | перенаправлять http → https | не используется | `True` (по умолчанию) |
 
-При `DEBUG=False` включаются защищённые cookie и перенаправление на HTTPS, а заголовок
-`X-Forwarded-Proto` от обратного прокси считается признаком HTTPS.
+При `DEBUG=False` включаются защищённые cookie и перенаправление на HTTPS, статику отдаёт
+WhiteNoise, а ошибки пишутся в вывод приложения. Признак HTTPS — заголовок
+`X-Forwarded-Proto` от обратного прокси.
 
-## Запуск на проде (минимальный рабочий вариант)
+## Запуск на сервере
 
-Полноценный деплой со скриптами, службой и резервными копиями по расписанию — этап 3 ТЗ.
-Ниже — то, что уже работает с текущими настройками. Подходит и для Linux, и для Windows.
+Система работает в Docker: два контейнера — приложение (`web`, Django под waitress) и база
+(`db`, PostgreSQL 16). Описание — в `Dockerfile` и `docker-compose.prod.yml`. Порты наружу
+не публикуются: запросы принимает обратный прокси сервера и передаёт их приложению по общей
+сети Docker `edge`.
 
-**1. База данных.** Тот же `docker compose up -d` (контейнер перезапускается сам,
-`restart: unless-stopped`) или отдельный PostgreSQL 16. В `.env` задать свой пароль
-в `POSTGRES_PASSWORD` и `DATABASE_URL`.
-
-**2. Код и окружение.**
+**1. Один раз на сервере.**
 
 ```bash
+docker network create edge          # общая сеть с обратным прокси
 git clone https://github.com/JxSol/MiniERP.git erp && cd erp
-uv sync --no-dev --frozen            # ровно версии из uv.lock, без pytest и ruff
-# без uv: python3.13 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp .env.example .env                # заполнить, см. ниже
 ```
 
-**3. `.env` для прода:** `DEBUG=False`, свой `SECRET_KEY`, `ALLOWED_HOSTS` и
-`CSRF_TRUSTED_ORIGINS` с реальным доменом, `DATABASE_URL` с надёжным паролем.
+В `.env` на сервере: `DEBUG=False`, свой `SECRET_KEY` (случайная строка от 40 символов),
+`ALLOWED_HOSTS` и `CSRF_TRUSTED_ORIGINS` с настоящим адресом, надёжный `POSTGRES_PASSWORD`
+из букв и цифр. `DATABASE_URL` можно не трогать: в контейнере его подставляет compose.
 
-**4. Таблицы, администратор, статика.**
+**2. Запуск и обновление** — одна и та же команда: она собирает образ, применяет миграции
+и перезапускает приложение.
 
 ```bash
-uv run manage.py migrate
-uv run manage.py createsuperuser
-uv run manage.py collectstatic --noinput   # складывает статику в staticfiles/
+docker compose -f docker-compose.prod.yml up -d --build
 ```
 
-**5. Приложение.** WSGI-сервер слушает только локальный адрес, наружу смотрит прокси.
+Первый администратор:
+`docker compose -f docker-compose.prod.yml exec web python manage.py createsuperuser`.
+Журнал приложения, в нём же ошибки:
+`docker compose -f docker-compose.prod.yml logs -f web`.
 
-```bash
-uv run waitress-serve --listen=127.0.0.1:8000 config.wsgi:application
-# то же самое напрямую из окружения: .venv/bin/waitress-serve …
-# на Linux можно gunicorn: uv add gunicorn && uv run gunicorn config.wsgi -b 127.0.0.1:8000 -w 3
-```
+**3. Обратный прокси.** Он передаёт запросы на `http://minierp:8000` — под этим именем
+приложение видно в сети `edge` — и добавляет заголовок `X-Forwarded-Proto`. Статику приложение
+отдаёт само (WhiteNoise), фото и файлы моделей — тоже само и только вошедшим пользователям,
+поэтому отдельные правила для `/static/` и `/media/` не нужны.
 
-Чтобы это была служба, на Linux — unit для systemd:
-
-```ini
-[Unit]
-Description=Mini-ERP
-After=network.target docker.service
-
-[Service]
-User=erp
-WorkingDirectory=/srv/erp
-ExecStart=/srv/erp/.venv/bin/waitress-serve --listen=127.0.0.1:8000 config.wsgi:application
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-На Windows ту же команду регистрируют как службу через NSSM или запускают задачей
-планировщика при старте системы.
-
-**6. HTTPS, статика и фото.** При `DEBUG=False` Django не отдаёт ни статику, ни папку
-`media/`, это делает обратный прокси. Самый простой — Caddy: сертификат получает сам.
+Caddy (сертификат получает сам):
 
 ```caddyfile
 erp.example.kz {
-    encode gzip
-    handle_path /static/* {
-        root * /srv/erp/staticfiles
-        file_server
-    }
-    handle_path /media/* {
-        root * /srv/erp/media
-        file_server
-    }
-    reverse_proxy 127.0.0.1:8000
+    reverse_proxy minierp:8000
 }
 ```
 
-Для nginx нужны такие же два `location` на `staticfiles/` и `media/` и `proxy_pass`
-с заголовком `X-Forwarded-Proto $scheme`.
+Traefik, настройки в файле:
 
-**7. Резервные копии.** Две вещи: база и папка `media/` с фото.
-
-```bash
-docker compose exec -T db pg_dump -U erp -Fc erp -f /tmp/erp.dump && docker compose cp db:/tmp/erp.dump ./backup/erp-$(date +%F).dump
-# восстановление: docker compose cp backup/erp-2026-10-22.dump db:/tmp/erp.dump && docker compose exec -T db pg_restore -U erp -d erp --clean /tmp/erp.dump
+```yaml
+http:
+  routers:
+    minierp:
+      rule: 'Host(`erp.example.kz`)'
+      entryPoints: [web-secure]
+      service: minierp
+      tls:
+        certResolver: letsencrypt
+  services:
+    minierp:
+      loadBalancer:
+        servers:
+          - url: http://minierp:8000
 ```
 
-Папку `media/` копируйте как обычные файлы. Делать это раз в сутки и хранить копии не на
-том же диске.
-
-**8. Обновление.**
+**4. Резервные копии.** Две вещи: база и том с фото.
 
 ```bash
-git pull
+docker compose -f docker-compose.prod.yml exec -T db pg_dump -U erp -Fc erp > backup/erp-$(date +%F).dump
+docker run --rm -v minierp_media:/media:ro -v "$PWD/backup":/backup alpine \
+    tar czf /backup/media-$(date +%F).tar.gz -C /media .
+```
+
+Восстановление:
+
+```bash
+docker compose -f docker-compose.prod.yml exec -T db pg_restore -U erp -d erp --clean --if-exists < backup/erp-2026-11-16.dump
+docker run --rm -v minierp_media:/media -v "$PWD/backup":/backup alpine \
+    sh -c "tar xzf /backup/media-2026-11-16.tar.gz -C /media && chown -R 10001 /media"
+```
+
+Делать копии раз в сутки и хранить не на том же сервере. Копирование по расписанию —
+следующий шаг этапа 3.
+
+**Без Docker** приложение запускается так же, как при разработке, но под waitress:
+
+```bash
 uv sync --no-dev --frozen
 uv run manage.py migrate
 uv run manage.py collectstatic --noinput
-# перезапустить службу приложения
+uv run waitress-serve --listen=127.0.0.1:8000 --trusted-proxy=127.0.0.1 \
+    --trusted-proxy-headers="x-forwarded-for x-forwarded-proto" config.wsgi:application
 ```
+
+Параметр `--trusted-proxy` обязателен: без него waitress отбрасывает заголовок
+`X-Forwarded-Proto`, и приложение бесконечно перенаправляет на HTTPS.
 
 ## Роли
 

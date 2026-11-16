@@ -1,0 +1,62 @@
+# Мини-ERP на сервере: приложение и его база. Порядок запуска — в README, раздел
+# «Запуск на сервере».
+#
+# Наружу ничего не публикуется. Запросы приходят от обратного прокси, который уже занимает
+# порты 80 и 443 на сервере, по общей сети Docker `edge` — её создают один раз:
+#   docker network create edge
+#
+# Имя проекта задано явно и не совпадает с именем проекта для разработки (erp), чтобы эта
+# сборка никогда не подключилась к тому с рабочей базой разработчика.
+name: minierp
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # Памяти на сервере мало: базе хватает небольшого кеша и двух десятков подключений
+    command: postgres -c shared_buffers=64MB -c max_connections=20
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-erp}
+      POSTGRES_USER: ${POSTGRES_USER:-erp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Задайте POSTGRES_PASSWORD в .env}
+      TZ: Asia/Almaty
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    image: minierp-web
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # Те же переменные, что в .env.example; DATABASE_URL из файла заменяется адресом контейнера.
+    # ERP_ENV_FILE нужен только для пробного запуска с другим файлом настроек
+    env_file: ${ERP_ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-erp}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-erp}
+      TZ: Asia/Almaty
+    volumes:
+      - media:/app/media
+    # Предел памяти: если приложению её не хватит, перезапустится оно, а не соседи по серверу
+    mem_limit: 512m
+    networks:
+      default:
+      edge:
+        # под этим именем приложение видит обратный прокси: http://minierp:8000
+        aliases:
+          - minierp
+
+networks:
+  edge:
+    external: true
+
+volumes:
+  pgdata:
+  media:
