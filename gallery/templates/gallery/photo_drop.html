@@ -1,0 +1,21 @@
+{% comment %}
+Область добавления фото над таблицей вкладки «Фото» (gallery/photo_drop.js). Показывается
+только тем, кому можно добавлять фото.
+{% endcomment %}
+{% if inline_admin_formset.has_add_permission %}
+    <div class="photo-drop" role="button" tabindex="0"
+         data-photo-drop="{{ inline_admin_formset.formset.prefix }}"
+         data-max-mb="{{ inline_admin_formset.opts.max_upload_mb }}"
+         data-extensions="{{ inline_admin_formset.opts.photo_extensions }}">
+        <span class="material-symbols-outlined photo-drop-icon">add_photo_alternate</span>
+
+        <div>
+            <div class="photo-drop-title">Перетащите фото сюда или нажмите, чтобы выбрать</div>
+            <div class="photo-drop-note">
+                Можно несколько сразу. Скопированную картинку или снимок экрана вставьте
+                клавишами Ctrl+V. Подходят JPG, PNG, WEBP и HEIC до {{ inline_admin_formset.opts.max_upload_mb }}&nbsp;МБ.
+            </div>
+            <div class="photo-drop-status" aria-live="polite"></div>
+        </div>
+    </div>
+{% endif %}

@@ -1,0 +1,116 @@
+/* Вкладка «Фото»: область, куда перетаскивают и вставляют фото (gallery/photo_drop.js) */
+
+.photo-drop {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 12px;
+    padding: 14px 16px;
+    border: 2px dashed var(--color-base-200);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: border-color 0.15s, background-color 0.15s;
+}
+
+.dark .photo-drop {
+    border-color: var(--color-base-700);
+}
+
+.photo-drop:hover,
+.photo-drop:focus-visible,
+.dark .photo-drop:hover,
+.dark .photo-drop:focus-visible {
+    border-color: var(--color-primary-600);
+    outline: none;
+}
+
+.photo-drop-icon {
+    font-size: 32px;
+    color: var(--color-primary-600);
+}
+
+.photo-drop-title {
+    font-weight: 600;
+    color: var(--color-font-important-light);
+}
+
+.dark .photo-drop-title {
+    color: var(--color-font-important-dark);
+}
+
+.photo-drop-note {
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--color-font-subtle-light);
+}
+
+.dark .photo-drop-note {
+    color: var(--color-font-subtle-dark);
+}
+
+.photo-drop-status:empty {
+    display: none;
+}
+
+.photo-drop-status {
+    margin-top: 6px;
+    font-weight: 500;
+}
+
+.photo-drop-status .photo-drop-rejected {
+    color: #dc2626;
+}
+
+.dark .photo-drop-status .photo-drop-rejected {
+    color: #f87171;
+}
+
+/*
+ * Миниатюра ещё не сохранённого фото: того же размера, что у сохранённых
+ * (core.admin_utils.thumbnail). Если браузер не умеет показать файл (HEIC), вместо картинки —
+ * квадрат с названием формата.
+ */
+.photo-drop-preview {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 64px;
+    height: 64px;
+    object-fit: cover;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-font-subtle-light);
+    background: var(--color-base-100);
+}
+
+.dark .photo-drop-preview {
+    color: var(--color-font-subtle-dark);
+    background: var(--color-base-800);
+}
+
+/* Пока файлы тащат над окном: рамка на всю страницу. Мышь её не замечает */
+.photo-drop-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    border: 4px dashed var(--color-primary-600);
+    background: rgba(15, 23, 42, 0.55);
+    pointer-events: none;
+}
+
+.photo-drop-overlay.is-active {
+    display: flex;
+}
+
+.photo-drop-overlay span {
+    padding: 14px 22px;
+    border-radius: 8px;
+    font-size: 18px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--color-primary-600);
+}

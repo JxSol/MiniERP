@@ -24,6 +24,8 @@ from django.dispatch import receiver
 from PIL import Image, ImageOps
 
 MAX_UPLOAD_MB = 15
+# Список, а не кортеж: в таком виде он записан в миграции, иначе Django увидит «изменение» поля
+PHOTO_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "heic", "heif"]
 THUMB_SIZE = (480, 480)
 WEB_FORMATS = {"JPEG", "PNG", "WEBP"}
 
@@ -82,10 +84,7 @@ class Photo(models.Model):
     image = models.ImageField(
         "Файл",
         upload_to=photo_path,
-        validators=[
-            FileExtensionValidator(["jpg", "jpeg", "png", "webp", "heic", "heif"]),
-            validate_size,
-        ],
+        validators=[FileExtensionValidator(PHOTO_EXTENSIONS), validate_size],
     )
     thumbnail = models.ImageField(upload_to=thumb_path, blank=True, editable=False)
     kind = models.CharField(
