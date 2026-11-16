@@ -164,6 +164,8 @@ UNFOLD = {
     "SITE_SYMBOL": "precision_manufacturing",
     "SHOW_HISTORY": True,
     "STYLES": [lambda request: static("core/admin.css")],
+    # Удаление новой строки в таблицах карточек без потери введённого в строках ниже
+    "SCRIPTS": [lambda request: static("core/inline_delete.js")],
     # Глобальный поиск по артикулу, названию, штрихкоду (Ctrl+K)
     "COMMAND": {"search_models": True, "show_history": True},
     "SIDEBAR": {

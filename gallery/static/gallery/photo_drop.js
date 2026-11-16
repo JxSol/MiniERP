@@ -303,42 +303,6 @@ document.addEventListener("DOMContentLoaded", function () {
         add(Array.from(event.dataTransfer.files));
     });
 
-    // --- Удаление новой строки ----------------------------------------------------------------
-
-    // Тема при удалении новой строки пересоздаёт строки под ней и теряет всё, что в них введено:
-    // выбранный файл, тип, подпись. Запоминаем значения до удаления и возвращаем после
-    let remembered = [];
-
-    function controls(row) {
-        return Array.from(row.querySelectorAll("input, select, textarea"));
-    }
-
-    document.addEventListener(
-        "click",
-        function (event) {
-            const button = elementOf(event).closest(".delete-template");
-            if (!button || !table.contains(button)) return;
-            remembered = rows()
-                .filter((row) => !row.contains(button))
-                .map((row) => ({
-                    row: row,
-                    values: controls(row).map((control) =>
-                        control.type === "file" ? control.files : control.value
-                    ),
-                }));
-        },
-        true // раньше обработчика темы
-    );
-
-    document.addEventListener("formset:removed", function (event) {
-        if (!event.detail || event.detail.formsetName !== prefix) return;
-        remembered.forEach(function (saved) {
-            controls(saved.row).forEach(function (control, index) {
-                const value = saved.values[index];
-                if (control.type !== "file") control.value = value;
-                else if (value.length && !control.files.length) control.files = value;
-            });
-        });
-        remembered = [];
-    });
+    // Удалить лишнее фото до сохранения можно корзиной в строке: выбранные файлы, типы и подписи
+    // в остальных строках при этом остаются (core/inline_delete.js)
 });
